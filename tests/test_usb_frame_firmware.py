@@ -28,10 +28,13 @@ ARDUINO = r"""
 struct MockSerial {
     std::vector<uint8_t> input;
     std::string output;
+    std::string queuedAck;
     size_t position = 0;
     size_t setRxBufferSize(size_t);
     void begin(unsigned long);
     void setTxTimeoutMs(uint32_t);
+    operator bool() const;
+    void flush();
     int available();
     size_t read(uint8_t *, size_t);
     void println(const char *);
@@ -86,7 +89,8 @@ static int64_t nowUs = 0, panelStart = -1;
 static bool begun = false, powered = false, initialized = false;
 static int initCalls = 0, clearCalls = 0, onCalls = 0, offCalls = 0, drawCalls = 0;
 static int busyCalls = 0, mallocCalls = 0, freeCalls = 0;
-static int ackCount = 0, readyCount = 0, readCalls = 0;
+static int ackCount = 0, readyCount = 0, readCalls = 0, connectionChecks = 0, flushCalls = 0;
+static int64_t lastOffUs = -1, lastFlushUs = -1;
 static size_t shortRead = 11;
 static bool queuePrepared = false, corruptRead = false;
 static bool scanExpiryArmed = false;
@@ -152,6 +156,29 @@ size_t MockSerial::setRxBufferSize(size_t size) {
 }
 void MockSerial::begin(unsigned long baud) { require(queuePrepared && baud == 115200, "begin order"); begun = true; }
 void MockSerial::setTxTimeoutMs(uint32_t value) { require(value == 100, "TX timeout"); }
+MockSerial::operator bool() const {
+    require(!powered && lastOffUs >= 0, "ACK connection check before panel off");
+    ++connectionChecks;
+    if (scenario == "ack_connection" || (scenario == "ack_flush_loss" && flushCalls)) return false;
+    if (scenario == "ack_recovery") return nowUs - lastOffUs >= 4000;
+    return true;
+}
+void MockSerial::flush() {
+    require(!powered && (bool)*this, "flush while disconnected or panel powered");
+    require(!queuedAck.empty(), "flush without exactly one queued ACK");
+    ++flushCalls;
+    // ACK는 printf 반환만으로 전달되지 않는다. flush에서만 수신 측으로 넘긴다.
+    nowUs += 2000;
+    if (scenario == "ack_flush_loss") {
+        // 코어 flush가 연결 상실 시 큐를 버리는 실패를 모의한다. 실제 원인 재현은 아니다.
+        queuedAck.clear();
+        lastFlushUs = nowUs;
+        return;
+    }
+    logLine(queuedAck.c_str());
+    queuedAck.clear();
+    lastFlushUs = nowUs;
+}
 int MockSerial::available() { return scenario == "rx_queue" ? -1 : (int)(input.size() - position); }
 size_t MockSerial::read(uint8_t *destination, size_t size) {
     ++readCalls;
@@ -165,7 +192,11 @@ void MockSerial::println(const char *line) { std::string value(line); value += '
 void MockSerial::printf(const char *format, ...) {
     char line[1024]; va_list args; va_start(args, format);
     int size = vsnprintf(line, sizeof(line), format, args); va_end(args);
-    require(size >= 0 && (size_t)size < sizeof(line), "response truncated"); logLine(line);
+    require(size >= 0 && (size_t)size < sizeof(line), "response truncated");
+    if (std::strstr(line, "USB_FRAME_ACK ") == line) {
+        require(!powered && (bool)*this && queuedAck.empty(), "ACK queued before connection/off or duplicated");
+        queuedAck = line;
+    } else logLine(line);
 }
 uint32_t millis() { return (uint32_t)(nowUs / 1000); }
 int64_t esp_timer_get_time() {
@@ -221,7 +252,7 @@ void epd_poweron() {
 }
 void epd_poweroff() {
     require(powered && clearCalls == onCalls && drawCalls == clearCalls, "poweroff before complete clear/draw pair");
-    powered = false; ++offCalls; nowUs += 20;
+    powered = false; ++offCalls; nowUs += 20; lastOffUs = nowUs;
 }
 void epd_clear() {
     require(powered && clearCalls == drawCalls && onCalls == clearCalls + 1, "full clear count/order");
@@ -260,6 +291,7 @@ static void sendFrame(const std::string &name) {
     auto packet = fixture(name);
     expectedNew.assign(packet.begin() + 20, packet.end() - 4);
     feed(packet);
+    if (state == WAIT_FRAME) require(receiveWindow >= lastFlushUs && lastFlushUs >= 0, "RX deadline starts before ACK flush");
 }
 static int occurrences(const std::string &needle) {
     int count = 0;
@@ -275,6 +307,8 @@ static void error(const char *reason) {
 }
 static void checkTerminal() {
     require(state == TERMINAL && !powered, "session not terminal/off");
+    require(Serial.queuedAck.empty() && flushCalls == ackCount + (scenario == "ack_flush_loss" ? 1 : 0),
+            "ACK was not flushed exactly once");
     int oldReads = readCalls, oldBusy = busyCalls, oldDraws = drawCalls, oldInit = initCalls;
     size_t oldOutput = Serial.output.size();
     for (int i = 0; i < 3; ++i) feed(fixture("start1"));
@@ -323,6 +357,34 @@ int main(int argc, char **argv) {
                 else {
                     require(state == WAIT_FRAME && busyCalls > 1 && occurrences("USB_FRAME_RX ") == 1, "START did not finish checks");
                     if (scenario == "golden") { sendFrame("white1"); require(frames == 1 && applied == 1 && clearCalls == 1 && drawCalls == 1, "first same white frame still clears and draws"); }
+                    else if (scenario == "ack_recovery") {
+                        sendFrame("render1");
+                        require(state == WAIT_FRAME && frames == 1 && applied == 1 && ackCount == 1 && flushCalls == 1,
+                                "recovered connection must send one ACK");
+                        require(connectionChecks >= 5 && lastFlushUs - lastOffUs >= 6000 && lastFlushUs - lastOffUs < 100000,
+                                "temporary disconnect did not wait then flush");
+                        feed(fixture("stop2"));
+                    } else if (scenario == "ack_flush_loss") {
+                        sendFrame("render1");
+                        require(state == TERMINAL && frames == 1 && applied == 1 && ackCount == 0 && flushCalls == 1 &&
+                                onCalls == 1 && offCalls == 1 && clearCalls == 1 && drawCalls == 1 && Serial.queuedAck.empty(),
+                                "flush connection loss was not stopped after completed display");
+                        require(occurrences("USB_FRAME_ERROR reason=ack_connection") == 1 && occurrences("USB_FRAME_DONE ") == 1 &&
+                                Serial.output.find("reason=error frames=1 applied=1") != std::string::npos,
+                                "flush failure completion must preserve displayed frame count");
+                        checkPanel(); guards();
+                    } else if (scenario == "ack_connection") {
+                        sendFrame("render1");
+                        require(state == TERMINAL && frames == 1 && applied == 1 && ackCount == 0 && flushCalls == 0 &&
+                                onCalls == 1 && offCalls == 1 && clearCalls == 1 && drawCalls == 1 && Serial.queuedAck.empty(),
+                                "failed ACK connection changed completed display or queued ACK");
+                        require(nowUs - lastOffUs >= 100000 && nowUs - lastOffUs < 101000 && connectionChecks >= 100,
+                                "ACK connection wait is not bounded at 100ms");
+                        require(occurrences("USB_FRAME_ERROR reason=ack_connection") == 1 && occurrences("USB_FRAME_DONE ") == 1 &&
+                                Serial.output.find("reason=error frames=1 applied=1") != std::string::npos,
+                                "ACK failure completion must preserve displayed frame count");
+                        checkPanel(); guards();
+                    }
                     else if (scenario == "limit") {
                         for (int i = 1; i <= 12; ++i) sendFrame("white" + std::to_string(i));
                         require(frames == 12 && applied == 1 && initCalls == 1 && onCalls == 1 && offCalls == 1 && clearCalls == 1 && drawCalls == 1, "unchanged or frame limit");
@@ -389,7 +451,8 @@ int main(int argc, char **argv) {
         std::cout << "PASS " << scenario << " ack=" << ackCount << " applied=" << applied
                   << " init=" << initCalls << " clear=" << clearCalls << " gray=" << drawCalls
                   << " on=" << onCalls << " off=" << offCalls
-                  << " frames=" << frames << " terminal=1 guards=ok\n";
+                  << " frames=" << frames << " flush=" << flushCalls << " connection_checks=" << connectionChecks
+                  << " terminal=1 guards=ok\n";
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "FAIL " << scenario << ": " << error.what() << '\n' << Serial.output;
@@ -458,7 +521,7 @@ def main() -> int:
     (BUILD / "harness.cpp").write_text(source)
     compile_command = [compiler, "-std=c++11", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
                        "-fno-omit-frame-pointer", "-I", str(BUILD), str(BUILD / "harness.cpp"), "-o", str(BUILD / "harness")]
-    scenarios = ["golden", "render", "cropped", "limit", "stop", "slow_frame", "screen_timeout", "scan_timeout", "late_crc", "frame_timeout", "partial_timeout",
+    scenarios = ["golden", "ack_recovery", "ack_connection", "ack_flush_loss", "render", "cropped", "limit", "stop", "slow_frame", "screen_timeout", "scan_timeout", "late_crc", "frame_timeout", "partial_timeout",
                  "rx_buffer", "rx_queue", "rx_read", "start_timeout", "start_magic", "start_version", "start_reserved",
                  "start_type", "start_sequence", "start_session", "start_length", "start_crc", "early_data", "limit0", "limit13",
                  "allocation1", "allocation2", "allocation3", "alignment", "frequency", "short_delay", "missing_sign",

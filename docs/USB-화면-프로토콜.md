@@ -42,7 +42,7 @@ ASCII 한 줄, LF 또는 CRLF. 필드는 공백으로 나눈 `key=value`, 줄은
 - `USB_FRAME_ACCEPT session=N max_frames=N` — 검증된 START. 메모리·CPU·20초 지연 검사를 수행한다.
 - `USB_FRAME_DELAY_DONE status=pass|fail ...` — 기존 지연 선행 검사의 결과. 부가 진단은 `USB_FRAME_STATS`를 사용한다.
 - `USB_FRAME_RX session=N` — 검사 통과·프레임 수신 가능. 여기 전에는 FRAME을 보내지 않는다.
-- `USB_FRAME_ACK session=N seq=N crc=XXXXXXXX result=applied|unchanged rx_us=N display_us=N clear_us=N draw_us=N elapsed_us=N` — CRC는 FRAME 패킷 CRC. 화면 처리와 poweroff 완료 후 이전 프레임을 확정한 뒤 응답한다. `rx_us`는 해당 패킷 첫 바이트부터 CRC 수신까지, `display_us`는 렌더 처리 전체, clear/draw는 전체 지우기·회색 그리기 호출, elapsed는 최초 panelon부터다.
+- `USB_FRAME_ACK session=N seq=N crc=XXXXXXXX result=applied|unchanged rx_us=N display_us=N clear_us=N draw_us=N elapsed_us=N` — CRC는 FRAME 패킷 CRC. 화면 처리와 poweroff 완료 후 이전 프레임을 확정한 뒤 응답한다. 응답 전 연결을 최대100ms 확인하며 ACK 후 flush·연결 재확인 뒤 다음 RX 제한을 시작한다. 연결 확인 실패는 ack_connection 오류로 끝낸다. flush는 호스트 수신 보장을 뜻하지 않는다. `rx_us`는 해당 패킷 첫 바이트부터 CRC 수신까지, `display_us`는 렌더 처리 전체, clear/draw는 전체 지우기·회색 그리기 호출, elapsed는 최초 panelon부터다.
 - `USB_FRAME_ERROR reason=CODE` — 오류. 추가 패널 접근·파싱·재동기화 없음.
 - `USB_FRAME_DONE session=N reason=limit|stop|time_limit|error frames=N applied=N` — terminal 상태. 이후 START/FRAME을 받아도 다시 실행하지 않는다.
 

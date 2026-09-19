@@ -323,11 +323,26 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs)
     ++frames;
     ++expectedSequence;
     const int64_t displayEnd = esp_timer_get_time();
+    // HWCDC는 연결 미확인 상태의 write를 큐에 남길 수 있다.
+    // 연결 확인 없이 flush하면 그 큐를 버리므로, 패널을 끈 뒤 짧게 확인한다.
+    const int64_t ackWait = esp_timer_get_time();
+    while (!Serial) {
+        if (esp_timer_get_time() - ackWait >= 100000) {
+            fail("ack_connection");
+            return;
+        }
+        delay(1);
+    }
     Serial.printf("USB_FRAME_ACK session=%lu seq=%lu crc=%08lx result=%s rx_us=%lld display_us=%lld clear_us=%lld draw_us=%lld elapsed_us=%lld\r\n",
                   (unsigned long)session, (unsigned long)sequence, (unsigned long)packetCrc,
                   changed ? "applied" : "unchanged", (long long)rxUs,
                   (long long)(displayEnd - displayStart), (long long)clearUs, (long long)drawUs,
                   (long long)(displayEnd - screenStart));
+    Serial.flush();
+    if (!Serial) {
+        fail("ack_connection");
+        return;
+    }
     if (frames >= frameLimit) finish("limit");
     else if (displayEnd - screenStart >= SCREEN_LIMIT_US) finish("time_limit");
     else receiveWindow = esp_timer_get_time();
