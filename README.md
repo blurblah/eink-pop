@@ -22,6 +22,7 @@ LILYGO 4.7인치 e-paper와 ESP32-S3를 이용해 Prince of Persia의 플레이 
 - [USB 화면 전송 계획](.Codex/plans/PLAN-20260920-0042-usb-game-frame-transfer.md): 정지 게임 화면 후 제한 연속 전송
 - [USB 화면 프로토콜](docs/USB-화면-프로토콜.md): 최신 PPM, 패킷·CRC·ACK·실행 제한
 - [USB 화면 전송 검증](docs/USB-화면-전송-검증.md): 게임 추출·전송·펌웨어와 실제 시험의 구분
+- [잔상 정리 진단](docs/잔상-정리-진단.md): 게임 출력 전 흰 화면 한 장·전체 지우기 결과
 
 ## 프로젝트의 역할
 
