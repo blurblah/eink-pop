@@ -1,0 +1,13 @@
+# 프로젝트 전용 도구·외부 라이브러리·빌드 캐시
+/.local/
+
+# 출고 펌웨어·장치 식별자·원본 로그
+/artifacts/
+
+# 자격증명과 개인 환경
+.env
+.env.*
+!.env.example
+secrets.*
+credentials.*
+.DS_Store
