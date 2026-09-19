@@ -1,0 +1,6 @@
+[submodule "repos/LilyGo-EPD47"]
+	path = repos/LilyGo-EPD47
+	url = https://github.com/Xinyuan-LilyGO/LilyGo-EPD47.git
+[submodule "repos/SDLPoP"]
+	path = repos/SDLPoP
+	url = https://github.com/NagyD/SDLPoP.git
