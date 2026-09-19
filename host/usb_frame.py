@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SDLPoP 최신 PPM을 한 장씩 보내는 제한 USB 시험 도구. Python 표준 라이브러리 전용."""
+"""SDLPoP 최신 PPM을 보정된 16계조로 보내는 제한 USB v2 시험 도구."""
 
 import argparse
 from dataclasses import dataclass
@@ -21,8 +21,9 @@ import zlib
 
 
 HEADER = struct.Struct("<4sBBHIII")
+VERSION = 2
 START, FRAME, STOP = 1, 2, 3
-PIXEL_BYTES = 8000
+PIXEL_BYTES = 32000
 MAX_LINE = 512
 MAX_RAW = 1024 * 1024
 MAX_EVENTS = 4096
@@ -69,9 +70,17 @@ def read_frame(path):
     packed = bytearray(PIXEL_BYTES)
     for pixel in range(320 * 200):
         offset = pixel * 3
-        luminance = (77 * rgb[offset] + 150 * rgb[offset + 1] + 29 * rgb[offset + 2]) >> 8
-        if luminance < 128:
-            packed[pixel // 8] |= 0x80 >> (pixel % 8)
+        red, green, blue = rgb[offset:offset + 3]
+        gray = ((77 * red + 150 * green + 29 * blue) >> 8) >> 4
+        y, x = divmod(pixel, 320)
+        # 사용자 확인 정지 이미지와 같은 규칙. 생명력 두 색은 중간톤 보정보다 우선한다.
+        if x < 69 and 194 <= y < 199 and (red, green, blue) == (228, 0, 0):
+            gray = 15
+        elif x < 69 and 194 <= y < 199 and (red, green, blue) == (184, 0, 0):
+            gray = 12
+        elif 1 <= gray <= 13:
+            gray += 1
+        packed[pixel // 2] |= gray << ((pixel % 2) * 4)
     payload = bytes(packed)
     evidence = {
         "source_sequence": int(match.group(1)),
@@ -80,14 +89,19 @@ def read_frame(path):
         "file_mtime_ns": info.st_mtime_ns, "file_bytes": info.st_size,
         "ppm_sha256": hashlib.sha256(raw).hexdigest(),
         "bitmap_sha256": hashlib.sha256(payload).hexdigest(),
+        "bpp": 4, "payload_bytes": PIXEL_BYTES, "pixel_order": "even_x_low_nibble",
     }
     return raw, payload, evidence
 
 
-def pbm(payload):
+def pgm(payload):
     if len(payload) != PIXEL_BYTES:
-        raise TransferError("1bpp 데이터는 8000바이트여야 합니다")
-    return b"P4\n320 200\n" + payload
+        raise TransferError("4bpp 데이터는 32000바이트여야 합니다")
+    pixels = bytearray(320 * 200)
+    for index, value in enumerate(payload):
+        pixels[index * 2] = (value & 15) * 17
+        pixels[index * 2 + 1] = (value >> 4) * 17
+    return b"P5\n320 200\n255\n" + pixels
 
 
 def packet(kind, session, sequence, payload=b""):
@@ -100,7 +114,7 @@ def packet(kind, session, sequence, payload=b""):
     )
     if not valid:
         raise TransferError("패킷 종류·순서·길이 오류")
-    body = HEADER.pack(b"EPK1", 1, kind, 0, session, sequence, len(payload)) + payload
+    body = HEADER.pack(b"EPK1", VERSION, kind, 0, session, sequence, len(payload)) + payload
     return body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
 
 
@@ -233,7 +247,9 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         raise TransferError("세션·프레임 제한 범위 오류")
     io = SerialIO(fd, raw_log, tx_log, metadata)
     metadata.update(session=session, max_frames=frames, frames=[], started_at=stamp(),
-                    start_packets_sent=0, stop_packets_sent=0, status="진행 중")
+                    start_packets_sent=0, stop_packets_sent=0, status="진행 중",
+                    protocol_version=VERSION, bpp=4, payload_bytes=PIXEL_BYTES,
+                    pixel_order="even_x_low_nibble", black=0, white=15)
     started = False
     acknowledged = applied = 0
     delay_passed = False
@@ -301,7 +317,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
 
     try:
         marker, values, _ = response(time.monotonic() + deadlines.ready, boot=True)
-        if marker != "USB_FRAME_READY" or values != {"version": "1", "panel": "untouched"}:
+        if marker != "USB_FRAME_READY" or values != {"version": str(VERSION), "panel": "untouched"}:
             raise TransferError("READY 버전·상태 불일치")
         if stop_requested():
             metadata.update(status="시작 전 취소", finished_at=stamp())
@@ -312,7 +328,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         accept_end = time.monotonic() + deadlines.accept
         while True:
             marker, values, _ = response(accept_end)
-            if marker == "USB_FRAME_READY" and values == {"version": "1", "panel": "untouched"}:
+            if marker == "USB_FRAME_READY" and values == {"version": str(VERSION), "panel": "untouched"}:
                 # START 이전에 커널·부분 줄에 남은 READY를 허용한다. 마감·START는 갱신하지 않는다.
                 continue
             if marker != "USB_FRAME_ACCEPT":
@@ -366,8 +382,8 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             if first_prefix is not None and not acknowledged:
                 with Path(str(first_prefix) + "-first.ppm").open("xb") as output:
                     output.write(raw)
-                with Path(str(first_prefix) + "-first.pbm").open("xb") as output:
-                    output.write(pbm(payload))
+                with Path(str(first_prefix) + "-first.pgm").open("xb") as output:
+                    output.write(pgm(payload))
             sequence = acknowledged + 1
             wire = packet(FRAME, session, sequence, payload)
             crc = struct.unpack("<I", wire[-4:])[0]
@@ -381,14 +397,14 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
                 return finish(values, event)
             if marker != "USB_FRAME_ACK":
                 raise TransferError("FRAME 뒤 ACK가 아닌 응답: " + marker)
-            exact(values, "session seq crc result rx_us display_us white_us black_us elapsed_us")
+            exact(values, "session seq crc result rx_us display_us clear_us draw_us elapsed_us")
             match_session(values)
             if unsigned(values, "seq") != sequence or values["crc"] != f"{crc:08x}":
                 raise TransferError("ACK sequence·CRC 불일치")
             if values["result"] not in ("applied", "unchanged"):
                 raise TransferError("ACK result 불일치")
-            timings = {key: unsigned(values, key) for key in ("rx_us", "display_us", "white_us", "black_us", "elapsed_us")}
-            if timings["white_us"] + timings["black_us"] > timings["display_us"] or timings["elapsed_us"] < previous_elapsed:
+            timings = {key: unsigned(values, key) for key in ("rx_us", "display_us", "clear_us", "draw_us", "elapsed_us")}
+            if timings["clear_us"] + timings["draw_us"] > timings["display_us"] or timings["elapsed_us"] < previous_elapsed:
                 raise TransferError("ACK 시간 구간·누적 시간 불일치")
             previous_elapsed = timings["elapsed_us"]
             frame_info["ack"] = {**values, **event}
@@ -408,7 +424,7 @@ def main(argv=None):
     parser.add_argument("--frame-path", type=Path, required=True, help="원자 교체되는 320×200 PPM")
     parser.add_argument("--frames", type=int, default=1, help="최대 프레임 수 1~12 (기본 1)")
     parser.add_argument("--port", help="별도 장치 식별을 완료한 현재 직렬 포트")
-    parser.add_argument("--preview", type=Path, metavar="PBM", help="PBM 변환만 저장하고 종료; 보드 접근 없음")
+    parser.add_argument("--preview", type=Path, metavar="PGM", help="16계조 PGM 변환만 저장하고 종료; 보드 접근 없음")
     parser.add_argument("--log-prefix", type=Path, help="원본·JSON·최초 이미지의 공통 경로")
     args = parser.parse_args(argv)
     if not 1 <= args.frames <= 12:
@@ -420,14 +436,14 @@ def main(argv=None):
         if args.preview:
             args.preview.parent.mkdir(parents=True, exist_ok=True)
             with args.preview.open("xb") as output:
-                output.write(pbm(payload))
+                output.write(pgm(payload))
             print(json.dumps({"status": "변환 완료; 보드 접근 없음", "preview": str(args.preview), **evidence}, ensure_ascii=False))
             return 0
         session = secrets.randbelow(0xFFFFFFFF) + 1
         prefix = args.log_prefix or ROOT / "artifacts/logs" / ("usb-frame-" + datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{session:08x}")
         paths = {key: Path(str(prefix) + suffix) for key, suffix in
                  (("raw", "-runtime.log"), ("tx", "-tx.bin"), ("json", "-observation.json"),
-                  ("ppm", "-first.ppm"), ("pbm", "-first.pbm"))}
+                  ("ppm", "-first.ppm"), ("pgm", "-first.pgm"))}
         if any(path.exists() for path in paths.values()):
             raise TransferError("로그·이미지 경로가 이미 있습니다. 덮어쓰거나 재실행하지 않습니다")
         prefix.parent.mkdir(parents=True, exist_ok=True)

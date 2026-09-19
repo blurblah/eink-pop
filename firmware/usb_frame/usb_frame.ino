@@ -1,5 +1,5 @@
 /**
- * EPK1 제한 USB 화면 수신: 최초 전체 지우기 후 바뀐 픽셀만 흰색→검정 출력.
+ * EPK1 v2 제한 USB 16계조 수신: 변경 화면마다 전체 지우기 후 회색조 출력.
  * 드라이버: https://github.com/Xinyuan-LilyGO/LilyGo-EPD47
  * 기준 커밋: f1607dab2df95295e6b50fc0e44c4c092a13938f (GNU GPL v3).
  * 출처·저작권은 드라이버 원본 LICENSE를 따른다.
@@ -20,7 +20,7 @@
 #endif
 extern "C" void busy_delay(uint32_t cycles);
 
-static const size_t SOURCE_BYTES = 8000;
+static const size_t SOURCE_BYTES = 32000;
 static const size_t MASK_ROW_BYTES = EPD_WIDTH / 2;
 static const size_t MASK_BYTES = MASK_ROW_BYTES * 400;
 static const int64_t RX_LIMIT_US = 5000000;
@@ -173,7 +173,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("USB_FRAME_READY version=1 panel=untouched");
+    Serial.println("USB_FRAME_READY version=2 panel=untouched");
     lastReadyMs = millis();
 }
 
@@ -194,7 +194,7 @@ static bool checkLimits()
 
 static bool validateHeader()
 {
-    if (memcmp(header, "EPK1", 4) != 0 || header[4] != 1 || header[6] || header[7]) {
+    if (memcmp(header, "EPK1", 4) != 0 || header[4] != 2 || header[6] || header[7]) {
         fail("header");
         return false;
     }
@@ -237,7 +237,7 @@ static void beginSession(uint32_t id)
     frameLimit = startPayload;
     Serial.printf("USB_FRAME_ACCEPT session=%lu max_frames=%lu\r\n",
                   (unsigned long)session, (unsigned long)frameLimit);
-    Serial.printf("USB_FRAME_STATS metric=config arduino=%d.%d.%d driver=f1607dab2df95295e6b50fc0e44c4c092a13938f source=320x200 bpp=1 msb_first=1 black=1 scale=2 x=160 y=70 rx_bytes=8192 mask_bytes=192000\r\n",
+    Serial.printf("USB_FRAME_STATS metric=config arduino=%d.%d.%d driver=f1607dab2df95295e6b50fc0e44c4c092a13938f source=320x200 bpp=4 even_low=1 black=0 white=15 scale=2 x=160 y=70 rx_bytes=32768 mask_bytes=192000 refresh=full_clear_then_gray\r\n",
                   ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH);
     Serial.printf("USB_FRAME_STATS metric=memory flash_bytes=%lu psram_bytes=%lu free_psram_bytes=%lu free_heap_bytes=%lu\r\n",
                   (unsigned long)ESP.getFlashChipSize(), (unsigned long)ESP.getPsramSize(),
@@ -259,7 +259,7 @@ static void beginSession(uint32_t id)
         fail("cpu_frequency");
         return;
     }
-    memset(previous, 0, SOURCE_BYTES);
+    memset(previous, 0xFF, SOURCE_BYTES);
     if (!checkDelay()) {
         fail("delay_test_failed");
         return;
@@ -273,22 +273,17 @@ static void beginSession(uint32_t id)
     receiveWindow = esp_timer_get_time();
 }
 
-static void makeMask(int firstRow, int lastRow, bool white)
+static void makeGrayImage()
 {
-    const size_t count = MASK_ROW_BYTES * (lastRow - firstRow + 1) * 2;
-    memset(mask, white ? 0x00 : 0xFF, count);
-    for (int y = firstRow; y <= lastRow; ++y) {
-        uint8_t *row = mask + (y - firstRow) * 2 * MASK_ROW_BYTES;
+    memset(mask, 0xFF, MASK_BYTES);
+    for (int y = 0; y < 200; ++y) {
+        uint8_t *row = mask + y * 2 * MASK_ROW_BYTES;
         for (int x = 0; x < 320; ++x) {
-            const uint8_t bit = 0x80U >> (x % 8);
-            const size_t offset = y * 40 + x / 8;
-            const bool oldBlack = (previous[offset] & bit) != 0;
-            const bool newBlack = (incoming[offset] & bit) != 0;
-            if (white ? (oldBlack && !newBlack) : (!oldBlack && newBlack)) {
-                // 두 가로 픽셀은 한 바이트이며 같은 바이트를 다음 행에도 복제한다.
-                row[80 + x] = white ? 0xFF : 0x00;
-                row[MASK_ROW_BYTES + 80 + x] = white ? 0xFF : 0x00;
-            }
+            const uint8_t packed = incoming[y * 160 + x / 2];
+            const uint8_t gray = (packed >> ((x % 2) * 4)) & 0x0F;
+            // 원본 한 픽셀을 같은 회색의 2×2 픽셀로 확대한다.
+            row[80 + x] = gray | (gray << 4);
+            row[MASK_ROW_BYTES + 80 + x] = row[80 + x];
         }
     }
 }
@@ -297,21 +292,12 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs)
 {
     if (!checkLimits()) return;
     const int64_t displayStart = esp_timer_get_time();
-    int firstRow = 200, lastRow = -1;
-    bool hasWhite = false, hasBlack = false;
-    for (size_t i = 0; i < SOURCE_BYTES; ++i) {
-        if (previous[i] != incoming[i]) {
-            const int row = i / 40;
-            if (row < firstRow) firstRow = row;
-            lastRow = row;
-            hasWhite |= (previous[i] & (uint8_t)~incoming[i]) != 0;
-            hasBlack |= ((uint8_t)~previous[i] & incoming[i]) != 0;
-        }
-    }
     const bool firstFrame = !panelInitialized;
-    const bool changed = firstFrame || hasWhite || hasBlack;
-    int64_t whiteUs = 0, blackUs = 0;
+    const bool changed = firstFrame || memcmp(previous, incoming, SOURCE_BYTES) != 0;
+    int64_t clearUs = 0, drawUs = 0;
     if (changed) {
+        makeGrayImage();
+        // 확대 중 예산이 만료되면 패널 접근 전에 중단한다.
         if (!checkLimits()) return;
         if (firstFrame) {
             epd_init();
@@ -319,22 +305,14 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs)
             screenStart = esp_timer_get_time();
         }
         epd_poweron();
-        if (firstFrame) epd_clear();
-        if (hasWhite || hasBlack) {
-            Rect_t area = {0, 70 + firstRow * 2, EPD_WIDTH, (lastRow - firstRow + 1) * 2};
-            if (hasWhite) {
-                makeMask(firstRow, lastRow, true);
-                const int64_t started = esp_timer_get_time();
-                epd_draw_image(area, mask, WHITE_ON_BLACK);
-                whiteUs = esp_timer_get_time() - started;
-            }
-            if (hasBlack) {
-                makeMask(firstRow, lastRow, false);
-                const int64_t started = esp_timer_get_time();
-                epd_draw_image(area, mask, BLACK_ON_WHITE);
-                blackUs = esp_timer_get_time() - started;
-            }
-        }
+        // 제조사 회색 API는 흰 바탕을 전제한다. 시작한 clear→draw는 끝까지 수행한다.
+        int64_t started = esp_timer_get_time();
+        epd_clear();
+        clearUs = esp_timer_get_time() - started;
+        Rect_t area = {0, 70, EPD_WIDTH, 400};
+        started = esp_timer_get_time();
+        epd_draw_grayscale_image(area, mask);
+        drawUs = esp_timer_get_time() - started;
         epd_poweroff();
         ++applied;
     }
@@ -345,10 +323,10 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs)
     ++frames;
     ++expectedSequence;
     const int64_t displayEnd = esp_timer_get_time();
-    Serial.printf("USB_FRAME_ACK session=%lu seq=%lu crc=%08lx result=%s rx_us=%lld display_us=%lld white_us=%lld black_us=%lld elapsed_us=%lld\r\n",
+    Serial.printf("USB_FRAME_ACK session=%lu seq=%lu crc=%08lx result=%s rx_us=%lld display_us=%lld clear_us=%lld draw_us=%lld elapsed_us=%lld\r\n",
                   (unsigned long)session, (unsigned long)sequence, (unsigned long)packetCrc,
                   changed ? "applied" : "unchanged", (long long)rxUs,
-                  (long long)(displayEnd - displayStart), (long long)whiteUs, (long long)blackUs,
+                  (long long)(displayEnd - displayStart), (long long)clearUs, (long long)drawUs,
                   (long long)(displayEnd - screenStart));
     if (frames >= frameLimit) finish("limit");
     else if (displayEnd - screenStart >= SCREEN_LIMIT_US) finish("time_limit");
@@ -387,10 +365,10 @@ static size_t readChunk(uint8_t *destination, size_t remaining, int available)
 void setup()
 {
     // HWCDC begin 전에 큐 크기를 고정한다. 동작 중 큐를 재생성하지 않는다.
-    const size_t rxSize = Serial.setRxBufferSize(8192);
+    const size_t rxSize = Serial.setRxBufferSize(32768);
     Serial.begin(115200);
     Serial.setTxTimeoutMs(100);
-    if (rxSize != 8192) fail("rx_buffer");
+    if (rxSize != 32768) fail("rx_buffer");
     else ready();
 }
 

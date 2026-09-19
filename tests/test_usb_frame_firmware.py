@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""실제 USB 수신 스케치를 포함해 파서·확대·차분·종료를 장치 없이 검증한다."""
+"""실제 USB 수신 스케치를 포함해 v2 파서·회색 확대·전체 정리·종료를 장치 없이 검증한다."""
 from pathlib import Path
 import hashlib
 import json
@@ -62,7 +62,7 @@ void epd_init();
 void epd_poweron();
 void epd_poweroff();
 void epd_clear();
-void epd_draw_image(Rect_t, uint8_t *, DrawMode_t);
+void epd_draw_grayscale_image(Rect_t, uint8_t *);
 """
 
 HARNESS = r"""
@@ -85,15 +85,15 @@ static std::string scenario;
 static int64_t nowUs = 0, panelStart = -1;
 static bool begun = false, powered = false, initialized = false;
 static int initCalls = 0, clearCalls = 0, onCalls = 0, offCalls = 0, drawCalls = 0;
-static int whiteCalls = 0, blackCalls = 0, busyCalls = 0, mallocCalls = 0, freeCalls = 0;
-static int ackCount = 0, readyCount = 0, readCalls = 0, whiteInFrame = 0;
+static int busyCalls = 0, mallocCalls = 0, freeCalls = 0;
+static int ackCount = 0, readyCount = 0, readCalls = 0;
 static size_t shortRead = 11;
 static bool queuePrepared = false, corruptRead = false;
 static bool scanExpiryArmed = false;
 static int scanClockReads = 0;
 struct Allocation { uint8_t *raw = nullptr, *pointer = nullptr; size_t size = 0; bool freed = false; };
 static std::array<Allocation, 3> allocations;
-static std::vector<uint8_t> expectedOld(8000, 0), expectedNew(8000, 0);
+static std::vector<uint8_t> expectedOld(32000, 255), expectedNew(32000, 255);
 static std::vector<uint8_t> panel(960 * 540, 15);
 MockSerial Serial;
 MockEsp ESP;
@@ -107,14 +107,14 @@ static void guards() {
         for (int i = 0; i < 32; ++i) require(item.pointer[item.size + i] == 0xA5, "right allocation guard");
     }
 }
-static bool pixel(const std::vector<uint8_t> &image, int x, int y) {
-    return (image[y * 40 + x / 8] & (0x80U >> (x % 8))) != 0;
+static uint8_t pixel(const std::vector<uint8_t> &image, int x, int y) {
+    return (image[y * 160 + x / 2] >> ((x % 2) * 4)) & 15;
 }
 static void checkPanel() {
     for (int y = 0; y < 540; ++y) for (int x = 0; x < 960; ++x) {
         uint8_t wanted = 15;
         if (x >= 160 && x < 800 && y >= 70 && y < 470)
-            wanted = pixel(expectedNew, (x - 160) / 2, (y - 70) / 2) ? 0 : 15;
+            wanted = pixel(expectedNew, (x - 160) / 2, (y - 70) / 2);
         require(panel[y * 960 + x] == wanted, "final panel pixel");
     }
 }
@@ -123,18 +123,30 @@ static void logLine(const char *buffer) {
     require(std::strlen(buffer) <= 512, "response exceeds protocol line limit");
     Serial.output += buffer;
     if (std::strstr(buffer, "USB_FRAME_ACK ") == buffer) {
-        require(previous && std::memcmp(previous, expectedNew.data(), 8000) == 0,
+        require(previous && std::memcmp(previous, expectedNew.data(), 32000) == 0,
                 "ACK before previous frame committed");
         require(!powered && onCalls == offCalls, "ACK before poweroff");
+        bool changed = ackCount == 0 || expectedOld != expectedNew;
+        require(std::strstr(buffer, changed ? "result=applied" : "result=unchanged"), "ACK result");
+        require(clearCalls == onCalls && drawCalls == clearCalls, "each changed frame must clear and draw once");
+        const char *clearField = std::strstr(buffer, " clear_us=");
+        const char *drawField = std::strstr(buffer, " draw_us=");
+        require(clearField && drawField && !std::strstr(buffer, "white_us=") && !std::strstr(buffer, "black_us="),
+                "v2 ACK timing fields");
+        long long clearUs = -1, drawUs = -1;
+        require(std::sscanf(clearField, " clear_us=%lld", &clearUs) == 1 &&
+                std::sscanf(drawField, " draw_us=%lld", &drawUs) == 1, "ACK timing values");
+        require(clearUs == (changed ? (scenario == "slow_frame" && ackCount == 1 ? 31000000 : 100) : 0) &&
+                drawUs == (changed ? 1000 : 0), "ACK clear/draw measurement boundary");
         checkPanel(); guards();
         expectedOld = expectedNew;
-        ++ackCount; whiteInFrame = 0;
+        ++ackCount;
     }
     if (std::strstr(buffer, "USB_FRAME_READY ") == buffer) ++readyCount;
     nowUs += 30;
 }
 size_t MockSerial::setRxBufferSize(size_t size) {
-    require(!begun && size == 8192 && !queuePrepared, "RX queue initialization order");
+    require(!begun && size == 32768 && !queuePrepared, "RX queue initialization order");
     queuePrepared = true;
     return scenario == "rx_buffer" ? 0 : size;
 }
@@ -180,7 +192,7 @@ extern "C" void busy_delay(uint32_t cycles) {
 void *heap_caps_malloc(size_t size, unsigned caps) {
     ++mallocCalls;
     require(mallocCalls <= 3 && caps == 3, "PSRAM allocation contract");
-    require(size == (mallocCalls == 3 ? 192000U : 8000U), "allocation size");
+    require(size == (mallocCalls == 3 ? 192000U : 32000U), "allocation size");
     if (scenario == "allocation" + std::to_string(mallocCalls)) return nullptr;
     Allocation &item = allocations[mallocCalls - 1];
     item.raw = (uint8_t *)std::malloc(size + 68); require(item.raw != nullptr, "host malloc");
@@ -207,36 +219,30 @@ void epd_poweron() {
     else require(nowUs - panelStart < 30000000, "new update after screen deadline");
     powered = true; ++onCalls; nowUs += 10;
 }
-void epd_poweroff() { require(powered, "poweroff state"); powered = false; ++offCalls; nowUs += 20; }
-void epd_clear() { require(powered && clearCalls == 0 && drawCalls == 0, "full clear count/order"); ++clearCalls; std::fill(panel.begin(), panel.end(), 15); nowUs += 100; }
-void epd_draw_image(Rect_t area, uint8_t *data, DrawMode_t mode) {
-    require(powered && clearCalls == 1 && data == allocations[2].pointer, "draw buffer/power");
+void epd_poweroff() {
+    require(powered && clearCalls == onCalls && drawCalls == clearCalls, "poweroff before complete clear/draw pair");
+    powered = false; ++offCalls; nowUs += 20;
+}
+void epd_clear() {
+    require(powered && clearCalls == drawCalls && onCalls == clearCalls + 1, "full clear count/order");
+    ++clearCalls; std::fill(panel.begin(), panel.end(), 15);
+    // 시작한 전체 지우기가 시간 예산을 넘겨도 그림·전원 끄기는 완료해야 한다.
+    nowUs += scenario == "slow_frame" && ackCount == 1 ? 31000000 : 100;
+}
+void epd_draw_grayscale_image(Rect_t area, uint8_t *data) {
+    require(powered && clearCalls == drawCalls + 1 && data == allocations[2].pointer, "draw buffer/power/clear");
+    require(area.x == 0 && area.y == 70 && area.width == 960 && area.height == 400, "full-width grayscale rectangle");
     guards();
-    int minimum = 200, maximum = -1; bool anyWhite = false, anyBlack = false;
-    for (int y = 0; y < 200; ++y) for (int x = 0; x < 320; ++x) {
-        bool before = pixel(expectedOld, x, y), after = pixel(expectedNew, x, y);
-        if (before != after) { minimum = std::min(minimum, y); maximum = y; }
-        anyWhite |= before && !after; anyBlack |= !before && after;
-    }
-    require(area.x == 0 && area.width == 960 && area.y == 70 + minimum * 2 &&
-            area.height == 2 * (maximum - minimum + 1), "changed-row bounding box");
-    bool white = mode == WHITE_ON_BLACK;
-    require(white ? anyWhite : (mode == BLACK_ON_WHITE && anyBlack), "empty or invalid polarity");
-    if (!white && anyWhite) require(whiteInFrame == 1, "black before white");
-    for (int y = 0; y < area.height; ++y) for (int x = 0; x < 960; ++x) {
-        bool active = false;
-        if (x >= 160 && x < 800) {
-            int sx = (x - 160) / 2, sy = (area.y + y - 70) / 2;
-            bool before = pixel(expectedOld, sx, sy), after = pixel(expectedNew, sx, sy);
-            active = white ? before && !after : !before && after;
-        }
+    for (int y = 0; y < 400; ++y) for (int x = 0; x < 960; ++x) {
+        uint8_t wanted = 15;
+        if (x >= 160 && x < 800) wanted = pixel(expectedNew, (x - 160) / 2, y / 2);
         uint8_t value = (data[y * 480 + x / 2] >> ((x % 2) * 4)) & 15;
-        require(value == (white ? (active ? 15 : 0) : (active ? 0 : 15)), "mask pixel/stride/expansion");
-        if (active) panel[(area.y + y) * 960 + x] = white ? 15 : 0;
+        require(value == wanted, "grayscale pixel/nibble/stride/expansion/padding");
+        require(panel[(70 + y) * 960 + x] == 15, "grayscale target was not cleared");
+        panel[(70 + y) * 960 + x] = value;
     }
     ++drawCalls;
-    if (white) { ++whiteCalls; ++whiteInFrame; } else ++blackCalls;
-    nowUs += scenario == "slow_frame" && ackCount == 1 && white ? 31000000 : 1000;
+    nowUs += 1000;
 }
 static std::vector<uint8_t> fixture(const std::string &name) {
     std::ifstream file(std::string(FIXTURE_PATH) + "/" + name + ".bin", std::ios::binary);
@@ -286,12 +292,13 @@ int main(int argc, char **argv) {
         else {
             for (int i = 0; i < 3; ++i) { delay(1000); loop(); }
             noPanel(); require(mallocCalls == 0 && busyCalls == 0 && readyCount >= 2, "boot not idle");
+            require(Serial.output.find("USB_FRAME_READY version=2 ") != std::string::npos, "READY protocol version");
             if (scenario == "rx_read") { corruptRead = true; feed({69}); error("rx_read"); }
             else if (scenario == "start_timeout") { feed({69}); nowUs = packetStart + 5000000; loop(); error("rx_timeout"); }
             else if (scenario.rfind("start_", 0) == 0) {
                 auto bytes = fixture("start1");
                 if (scenario == "start_magic") bytes[0] ^= 1;
-                if (scenario == "start_version") bytes[4] = 2;
+                if (scenario == "start_version") bytes[4] = 1;
                 if (scenario == "start_reserved") bytes[6] = 1;
                 if (scenario == "start_type") bytes[5] = 2;
                 if (scenario == "start_sequence") bytes[12] = 1;
@@ -302,7 +309,7 @@ int main(int argc, char **argv) {
                 error(scenario == "start_crc" ? "crc" :
                       (scenario == "start_magic" || scenario == "start_version" || scenario == "start_reserved") ? "header" : "start_header");
             } else if (scenario == "early_data") {
-                auto bytes = fixture("start1"), frame = fixture("zero1"); bytes.insert(bytes.end(), frame.begin(), frame.end());
+                auto bytes = fixture("start1"), frame = fixture("white1"); bytes.insert(bytes.end(), frame.begin(), frame.end());
                 feed(bytes, bytes.size()); error("early_data");
             } else {
                 std::string start = scenario == "golden" ? "start1" : scenario == "limit0" ? "start0" : scenario == "limit13" ? "start13" : "start12";
@@ -315,19 +322,19 @@ int main(int argc, char **argv) {
                 else if (scenario == "short_delay" || scenario == "missing_sign" || scenario == "delay_timeout" || scenario == "core_change") error("delay_test_failed");
                 else {
                     require(state == WAIT_FRAME && busyCalls > 1 && occurrences("USB_FRAME_RX ") == 1, "START did not finish checks");
-                    if (scenario == "golden") { sendFrame("zero1"); require(frames == 1 && applied == 1 && clearCalls == 1 && drawCalls == 0, "first white frame"); }
+                    if (scenario == "golden") { sendFrame("white1"); require(frames == 1 && applied == 1 && clearCalls == 1 && drawCalls == 1, "first same white frame still clears and draws"); }
                     else if (scenario == "limit") {
-                        for (int i = 1; i <= 12; ++i) sendFrame("zero" + std::to_string(i));
-                        require(frames == 12 && applied == 1 && initCalls == 1 && onCalls == 1 && offCalls == 1 && drawCalls == 0, "unchanged or frame limit");
+                        for (int i = 1; i <= 12; ++i) sendFrame("white" + std::to_string(i));
+                        require(frames == 12 && applied == 1 && initCalls == 1 && onCalls == 1 && offCalls == 1 && clearCalls == 1 && drawCalls == 1, "unchanged or frame limit");
                     } else if (scenario == "render") {
                         for (int i = 1; i <= 7; ++i) sendFrame("render" + std::to_string(i));
-                        require(frames == 7 && applied == 5 && onCalls == 5 && offCalls == 5 && whiteCalls == 3 && blackCalls == 3,
-                                "polarity/unchanged counts");
+                        require(frames == 7 && applied == 5 && onCalls == 5 && offCalls == 5 && clearCalls == 5 && drawCalls == 5,
+                                "gray transitions/unchanged counts");
                         feed(fixture("stop8")); require(Serial.output.find("reason=stop frames=7 applied=5") != std::string::npos, "STOP after frames");
                     } else if (scenario == "stop") { feed(fixture("stop1"), 1); noPanel(); require(state == TERMINAL && frames == 0, "STOP before frame"); }
                     else if (scenario == "cropped") {
-                        sendFrame("zero1"); sendFrame("crop2"); sendFrame("crop3");
-                        require(frames == 3 && applied == 3 && whiteCalls == 1 && blackCalls == 2, "cropped passes");
+                        sendFrame("white1"); sendFrame("crop2"); sendFrame("crop3");
+                        require(frames == 3 && applied == 3 && clearCalls == 3 && drawCalls == 3, "nibble and edge changes still redraw full image");
                         feed(fixture("stop4"));
                     } else if (scenario == "scan_timeout") {
                         sendFrame("render1");
@@ -347,7 +354,7 @@ int main(int argc, char **argv) {
                     }
                     else if (scenario == "slow_frame") {
                         sendFrame("render1"); sendFrame("render2_changed");
-                        require(frames == 2 && applied == 2 && whiteCalls == 1 && blackCalls == 2 && nowUs - panelStart > 30000000,
+                        require(frames == 2 && applied == 2 && clearCalls == 2 && drawCalls == 2 && onCalls == 2 && offCalls == 2 && nowUs - panelStart > 30000000,
                                 "in-progress frame cutoff");
                         require(Serial.output.find("reason=time_limit frames=2") != std::string::npos, "slow frame limit");
                     } else if (scenario == "screen_timeout") {
@@ -356,10 +363,10 @@ int main(int argc, char **argv) {
                                 "screen timeout while receiving");
                     } else if (scenario == "frame_timeout") { nowUs = receiveWindow + 5000000; loop(); error("rx_timeout"); }
                     else if (scenario == "partial_timeout") {
-                        auto bytes = fixture("zero1"); feed(std::vector<uint8_t>(bytes.begin(), bytes.end() - 1));
+                        auto bytes = fixture("white1"); feed(std::vector<uint8_t>(bytes.begin(), bytes.end() - 1));
                         noPanel(); nowUs = receiveWindow + 5000000; feed({bytes.back()}); error("rx_timeout");
                     } else {
-                        auto bytes = fixture("zero1");
+                        auto bytes = fixture("white1");
                         if (scenario == "frame_crc") bytes[800] ^= 1;
                         if (scenario == "frame_session") bytes[8] ^= 1;
                         if (scenario == "frame_sequence") bytes[12] = 2;
@@ -373,15 +380,15 @@ int main(int argc, char **argv) {
             }
         }
         checkTerminal();
-        for (const char *name : {"start1", "zero1", "stop2"}) {
+        for (const char *name : {"start1", "white1", "stop2"}) {
             auto bytes = fixture(name);
             uint32_t crc = updateCrc(0xFFFFFFFFU, bytes.data(), bytes.size() - 4) ^ 0xFFFFFFFFU;
             require(crc == readLe32(bytes.data() + bytes.size() - 4), "golden packet CRC");
         }
         require(occurrences("USB_FRAME_ACK ") == ackCount, "duplicate ACK");
         std::cout << "PASS " << scenario << " ack=" << ackCount << " applied=" << applied
-                  << " init=" << initCalls << " clear=" << clearCalls << " white=" << whiteCalls
-                  << " black=" << blackCalls << " on=" << onCalls << " off=" << offCalls
+                  << " init=" << initCalls << " clear=" << clearCalls << " gray=" << drawCalls
+                  << " on=" << onCalls << " off=" << offCalls
                   << " frames=" << frames << " terminal=1 guards=ok\n";
         return 0;
     } catch (const std::exception &error) {
@@ -393,7 +400,7 @@ int main(int argc, char **argv) {
 
 
 def packet(kind: int, sequence: int, payload: bytes) -> bytes:
-    header = struct.pack("<4sBBHIII", b"EPK1", 1, kind, 0, SESSION, sequence, len(payload))
+    header = struct.pack("<4sBBHIII", b"EPK1", 2, kind, 0, SESSION, sequence, len(payload))
     return header + payload + struct.pack("<I", zlib.crc32(header + payload) & 0xFFFFFFFF)
 
 
@@ -419,25 +426,32 @@ def main() -> int:
     for limit in (0, 1, 12, 13):
         (BUILD / f"start{limit}.bin").write_bytes(packet(1, 0, bytes([limit])))
     for seq in range(1, 13):
-        (BUILD / f"zero{seq}.bin").write_bytes(packet(2, seq, bytes(8000)))
+        (BUILD / f"white{seq}.bin").write_bytes(packet(2, seq, bytes([255]) * 32000))
     for seq in (1, 2, 4, 8):
         (BUILD / f"stop{seq}.bin").write_bytes(packet(3, seq, b""))
-    first = bytes((i * 37 + 131) & 255 for i in range(8000))
+    first = bytes((i * 37 + 131) & 255 for i in range(32000))
     # 명령처럼 보이는 바이트도 프레임 본문으로만 처리되는지 함께 확인한다.
     first = first[:64] + b"EPK1RUN\nSTART\n" + first[78:]
-    assert len(first) == 8000
+    assert len(first) == 32000
     second = bytes(value ^ 0xA5 for value in first)
     subset = bytes(value & 0x55 for value in second)
-    for seq, data in enumerate((first, first, second, subset, bytes([255]) * 8000, bytes(8000), bytes(8000)), 1):
+    for seq, data in enumerate((first, first, second, subset, bytes([255]) * 32000, bytes(32000), bytes(32000)), 1):
         (BUILD / f"render{seq}.bin").write_bytes(packet(2, seq, data))
     (BUILD / "render2_changed.bin").write_bytes(packet(2, 2, second))
-    crop = bytearray(8000)
-    for x in (0, 7, 8, 319):
-        crop[57 * 40 + x // 8] |= 0x80 >> (x % 8)
+    # 하위·상위 nibble과 첫/끝 행·열, 모든 16계조를 고립된 변경으로 검사한다.
+    def set_gray(image: bytearray, x: int, y: int, value: int) -> None:
+        index, shift = y * 160 + x // 2, (x % 2) * 4
+        image[index] = (image[index] & ~(15 << shift)) | (value << shift)
+
+    crop = bytearray([255]) * 32000
+    for x, y, gray in ((0, 0, 0), (1, 0, 1), (318, 199, 13), (319, 199, 14)):
+        set_gray(crop, x, y, gray)
+    for gray in range(16):
+        set_gray(crop, gray, 57, gray)
     (BUILD / "crop2.bin").write_bytes(packet(2, 2, bytes(crop)))
-    moved = bytearray(8000)
-    for x, y in ((7, 57), (8, 59)):
-        moved[y * 40 + x // 8] |= 0x80 >> (x % 8)
+    moved = bytearray([255]) * 32000
+    for x, y, gray in ((0, 0, 15), (1, 0, 0), (318, 199, 1), (319, 199, 15), (159, 58, 7), (160, 59, 8)):
+        set_gray(moved, x, y, gray)
     (BUILD / "crop3.bin").write_bytes(packet(2, 3, bytes(moved)))
     sketch = ROOT / "firmware/usb_frame/usb_frame.ino"
     source = '#define SKETCH_PATH ' + json.dumps(str(sketch)) + "\n#define FIXTURE_PATH " + json.dumps(str(BUILD)) + "\n" + HARNESS
@@ -455,8 +469,8 @@ def main() -> int:
             log.write(text)
             log.flush()
 
-        record(f"실제 USB 수신 스케치 호스트 검증\nsketch_sha256={hashlib.sha256(sketch.read_bytes()).hexdigest()}\n")
-        for name in ("start1", "zero1", "stop2"):
+        record(f"실제 USB v2 4bpp 수신 스케치 호스트 검증\nsketch_sha256={hashlib.sha256(sketch.read_bytes()).hexdigest()}\n")
+        for name in ("start1", "white1", "stop2"):
             value = (BUILD / f"{name}.bin").read_bytes()
             record(f"GOLDEN {name} bytes={len(value)} header={value[:20].hex()} crc={int.from_bytes(value[-4:], 'little'):08x} trailer={value[-4:].hex()}\n")
         result = subprocess.run(compile_command, capture_output=True, text=True)
