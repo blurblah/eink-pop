@@ -41,7 +41,7 @@ static uint32_t physicalPsramBytes() {
 static void ready() {
 #ifdef EINK_PAINTER_GAME
 #ifdef EINK_PAINTER_NORMAL
-    Serial.printf("PAINTER_READY version=5 panel=untouched driver=7544e2d board=H716 quality=NORMAL gray=4 nvs=0 direct=1 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
+    Serial.printf("PAINTER_READY version=6 panel=untouched driver=7544e2d board=H716 quality=NORMAL gray=4 nvs=0 direct=1 profile=0 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
 #elif defined(EINK_PAINTER_DIRECT)
     Serial.printf("PAINTER_READY version=4 panel=untouched driver=7544e2d board=H716 quality=FAST gray=4 nvs=0 direct=1 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
 #else
@@ -128,10 +128,12 @@ static void run(uint8_t mode) {
     panel.setIdleTimeout(60); // 30초 시험 중 기본 5초 타이머가 레일을 끄지 않도록 한다.
 #ifdef EINK_PAINTER_NORMAL
     panel.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+    // 드라이버 printf와 HWCDC Serial이 같은 USB에서 섞인 v5 관측에 따른 제한.
+    panel.setPaintProfile(false);
 #else
     panel.setQuality(EPD_Painter::Quality::QUALITY_FAST);
-#endif
     panel.setPaintProfile(true);
+#endif
     if (!panel.begin()) { fail("begin_failed"); return; }
     initialized = true;
 #ifdef EINK_PAINTER_DIRECT

@@ -45,7 +45,7 @@ public:
   void setAutoShutdown(bool);
   void setIdleTimeout(int);
   void setQuality(Quality);
-  void setPaintProfile(bool) {}
+  void setPaintProfile(bool);
   bool begin();
   bool setDirectTransitions(bool);
   void clearBuffers();
@@ -69,6 +69,7 @@ static int64_t clockUs=0;
 static int begins=0, clears=0, paints=0, offs=0, freed=0, completed=0;
 static bool autoOff=true, qualitySet=false, buffers=false, busy=false;
 static int idleSeconds=0, directCalls=0;
+static bool profileSet=false;
 MockSerial Serial;
 MockEsp ESP;
 #include SKETCH_PATH
@@ -84,8 +85,17 @@ void EPD_Painter::setQuality(Quality q) {
 #endif
   qualitySet=true;
 }
+void EPD_Painter::setPaintProfile(bool on) {
+  assert(begins==0);
+#ifdef EINK_PAINTER_NORMAL
+  assert(!on);
+#else
+  assert(on);
+#endif
+  profileSet=true;
+}
 bool EPD_Painter::begin() {
-  assert(!autoOff && qualitySet && idleSeconds==60); ++begins;
+  assert(!autoOff && qualitySet && profileSet && idleSeconds==60); ++begins;
   if(scenario=="slow_begin") clockUs+=31000000;
   return scenario!="begin_fail";
 }
@@ -163,8 +173,8 @@ int main(int argc, char** argv) {
   for(int i=0;i<2200;++i) loop();
   assert(begins==0 && clears==0 && paints==0 && offs==0);
 #ifdef EINK_PAINTER_NORMAL
-  assert(Serial.output.find("PAINTER_READY version=5 panel=untouched")!=std::string::npos);
-  assert(Serial.output.find("quality=NORMAL gray=4 nvs=0 direct=1 clip=fixture")!=std::string::npos);
+  assert(Serial.output.find("PAINTER_READY version=6 panel=untouched")!=std::string::npos);
+  assert(Serial.output.find("quality=NORMAL gray=4 nvs=0 direct=1 profile=0 clip=fixture")!=std::string::npos);
 #elif defined(EINK_PAINTER_DIRECT)
   assert(Serial.output.find("PAINTER_READY version=4 panel=untouched")!=std::string::npos);
 #elif defined(EINK_PAINTER_GAME)
