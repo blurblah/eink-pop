@@ -67,8 +67,8 @@ class Peer:
     def packet(self):
         header = self.read_exact(20)
         magic, version, kind, reserved, session, seq, length = struct.unpack("<4sBBHIII", header)
-        assert magic == b"EPK1" and version == 2 and reserved == 0
-        assert session == SESSION and length in (0, 1, 32000)
+        assert magic == b"EPK1" and version == 3 and reserved == 0
+        assert session == SESSION and length in (0, 1, 8000)
         tail = self.read_exact(length + 4)
         payload, crc = tail[:-4], struct.unpack("<I", tail[-4:])[0]
         assert crc_reference(header + payload) == crc
@@ -81,7 +81,7 @@ class Peer:
         assert not select.select([self.fd], [], [], duration)[0], "ACK 전에 다음 패킷이 전송됨"
 
     def handshake(self, frames=1, before_rx=None):
-        self.send("USB_FRAME_READY version=2 panel=untouched\r\n", fragment=3)
+        self.send("USB_FRAME_READY version=3 panel=untouched\r\n", fragment=3)
         start = self.packet()
         assert start["type"] == usb.START and start["seq"] == 0 and start["payload"] == bytes([frames])
         self.send(f"USB_FRAME_ACCEPT session={SESSION} max_frames={frames}\n")
@@ -95,7 +95,7 @@ class Peer:
     def ack(self, frame, result="applied", changes=None):
         fields = {"session": str(SESSION), "seq": str(frame["seq"]), "crc": frame["crc"],
                   "result": result, "rx_us": "100", "display_us": "500",
-                  "clear_us": "200", "draw_us": "250", "elapsed_us": str(1000 * frame["seq"])}
+                  "clear_us": "100", "white_us": "150", "black_us": "150", "elapsed_us": str(1000 * frame["seq"])}
         if changes:
             fields.update(changes)
         return "USB_FRAME_ACK " + " ".join(f"{k}={v}" for k, v in fields.items()) + "\n"
@@ -153,17 +153,15 @@ class HostTests(unittest.TestCase):
             self.assertFalse(worker.is_alive(), "모의 보드 스레드가 종료되지 않음")
             if errors:
                 raise errors[0]
-            self.assertEqual(tx.getvalue().count(b"EPK1\x02\x01"), starts)
+            self.assertEqual(tx.getvalue().count(b"EPK1\x03\x01"), starts)
             return metadata, peer, raw.getvalue(), tx.getvalue()
         finally:
             os.close(slave)
             with contextlib.suppress(OSError):
                 os.close(master)
 
-    def test_gray_palette_packing_and_fd_metadata(self):
-        colors = [(0,0,0), (127,127,127), (128,128,128), (255,255,255),
-                  (255,0,0), (0,255,0), (0,0,255), (255,255,0)]
-        rgb = bytes(value for color in colors for value in color) * 8000
+    def test_bit_packing_rows_and_fd_metadata(self):
+        rgb = b"\0\0\0\xff\xff\xff" * 32000
         self.frame.write_bytes(b"P6\n# eink sequence 17\n320 200\n255\n" + rgb)
         old_mtime = self.frame.stat().st_mtime_ns
         real_fstat = os.fstat
@@ -174,42 +172,78 @@ class HostTests(unittest.TestCase):
 
         with mock.patch.object(usb.os, "fstat", replaced_fstat):
             raw, payload, evidence = usb.read_frame(self.frame)
-        self.assertEqual(payload, bytes([0x80, 0xF9, 0xA5, 0xE2]) * 8000)
+        self.assertEqual(payload, b"\xaa" * 8000)
         self.assertEqual(evidence["source_sequence"], 17)
         self.assertEqual(evidence["file_mtime_ns"], old_mtime)
         self.assertEqual(evidence["file_bytes"], len(raw))
-        self.assertEqual((evidence["bpp"],evidence["payload_bytes"],evidence["pixel_order"]),
-                         (4,32000,"even_x_low_nibble"))
-        self.assertEqual(usb.pgm(payload), b"P5\n320 200\n255\n" + bytes(value * 17 for value in (0,8,9,15,5,10,2,14)) * 8000)
+        self.assertEqual((evidence["bpp"], evidence["payload_bytes"], evidence["pixel_order"]),
+                         (1, 8000, "msb_first"))
+        self.assertEqual(usb.pgm(payload), b"P5\n320 200\n255\n" + b"\0\xff" * 32000)
 
-    def test_all_gray_levels_and_quantization_boundaries(self):
-        rgb=bytearray(192000)
+    def test_all_brightness_boundaries_monotonic_and_endpoints(self):
+        # 0..255를 각각 4×4 블록으로 배치해 모든 Bayer 위상에서 평가한다.
+        rgb = bytearray(192000)
         for value in range(256):
-            rgb[value*3:value*3+3]=bytes([value])*3
-        self.frame.write_bytes(b"P6\n# eink sequence 1\n320 200\n255\n"+rgb)
-        _,payload,_=usb.read_frame(self.frame)
-        # 각 구간의 양 끝을 포함한 0..255 모두. 검정0·밝은14·흰색15는 유지한다.
-        levels=(0,2,3,4,5,6,7,8,9,10,11,12,13,14,14,15)
-        expected=bytes(level | (level<<4) for level in levels for _ in range(8))
-        self.assertEqual(payload[:128],expected)
-        self.assertEqual(payload[128:],b"\0"*(32000-128))
-        preview=usb.pgm(payload)
-        self.assertEqual(preview[:15],b"P5\n320 200\n255\n")
-        self.assertEqual(preview[15:271],bytes(level*17 for level in levels for _ in range(16)))
+            by, bx = divmod(value, 80)
+            for dy in range(4):
+                for dx in range(4):
+                    offset = ((by * 4 + dy) * 320 + bx * 4 + dx) * 3
+                    rgb[offset:offset+3] = bytes([value]) * 3
+        self.frame.write_bytes(b"P6\n# eink sequence 1\n320 200\n255\n" + rgb)
+        _, payload, _ = usb.read_frame(self.frame)
+        pixels = usb.pgm(payload)[15:]
+        counts = []
+        for value in range(256):
+            by, bx = divmod(value, 80)
+            counts.append(sum(pixels[(by*4+dy)*320+bx*4+dx] == 255 for dy in range(4) for dx in range(4)))
+        # 사용자 확인 보정 후 각 16명도 구간의 흰 점 개수와 끝값.
+        expected = (0,2,3,4,5,6,7,9,10,11,12,13,14,15,15,16)
+        self.assertEqual(counts, [count for count in expected for _ in range(16)])
+        self.assertEqual(counts, sorted(counts))
 
-    def test_health_palette_exact_colors_roi_and_nibbles(self):
-        colors=((228,0,0,5,15),(184,0,0,4,12),(227,0,0,5,5),(228,1,0,5,5),
-                (228,0,1,5,5),(183,0,0,4,4),(184,1,0,4,4),(184,0,1,4,4))
-        for red,green,blue,ordinary,health in colors:
-            with self.subTest(rgb=(red,green,blue)):
-                self.frame.write_bytes(b"P6\n# eink sequence 1\n320 200\n255\n"+bytes((red,green,blue))*64000)
-                _,payload,_=usb.read_frame(self.frame)
-                for y in (0,193,194,198,199):
-                    for x in (0,1,67,68,69,70,318,319):
-                        value=(payload[y*160+x//2]>>((x%2)*4))&15
-                        self.assertEqual(value,health if x<69 and 194<=y<199 else ordinary,(x,y))
-                self.assertEqual(payload[194*160+34],health | (ordinary<<4))
-                self.assertEqual(payload[199*160+34],ordinary | (ordinary<<4))
+    def test_health_palette_exact_roi_and_contrast(self):
+        colors = ((228,0,0), (184,0,0), (227,0,0), (228,1,0),
+                  (228,0,1), (183,0,0), (184,1,0), (184,0,1))
+        thresholds = ((0,8,2,10), (12,4,14,6), (3,11,1,9), (15,7,13,5))
+        for color in colors:
+            with self.subTest(rgb=color):
+                self.frame.write_bytes(b"P6\n# eink sequence 1\n320 200\n255\n" + bytes(color)*64000)
+                _, payload, _ = usb.read_frame(self.frame)
+                pixels = usb.pgm(payload)[15:]
+                ordinary = 5 if color[0] >= 227 else 4
+                for y in (0,193,194,195,196,197,198,199):
+                    for x in (0,1,2,3,4,7,8,67,68,69,70,318,319):
+                        level = ordinary
+                        if x < 69 and 194 <= y < 199:
+                            if color == (228,0,0): level = 15
+                            elif color == (184,0,0): level = 12
+                        expected = 255 if level*32 >= (2*thresholds[y%4][x%4]+1)*15 else 0
+                        self.assertEqual(pixels[y*320+x], expected, (x,y))
+                if color == (228,0,0):
+                    self.assertTrue(all(pixels[y*320+x] == 255 for y in range(194,199) for x in range(69)))
+
+    def test_fixed_pattern_and_local_source_change(self):
+        self.replace(1, 127)
+        _, before, _ = usb.read_frame(self.frame)
+        self.replace(900, 127)
+        _, again, _ = usb.read_frame(self.frame)
+        self.assertEqual(before, again)
+        pixels = usb.pgm(before)[15:]
+        self.assertEqual(pixels[:8], bytes((255,255,255,0,255,255,255,0)))
+        # 같은 입력 전체는 고정되고 변경한 한 픽셀만 다른 출력을 갖는다.
+        raw = bytearray(self.frame.read_bytes())
+        for x,y in ((0,0), (7,0), (8,1), (319,199)):
+            offset = len(raw)-192000+(y*320+x)*3
+            raw[offset:offset+3] = bytes([255 if pixels[y*320+x] == 0 else 0])*3
+        self.frame.write_bytes(raw)
+        _, after, _ = usb.read_frame(self.frame)
+        changed = [i for i,(a,b) in enumerate(zip(pixels,usb.pgm(after)[15:])) if a != b]
+        self.assertEqual(changed, [0,7,328,63999])
+
+    def test_preview_rejects_wrong_payload_size(self):
+        for length in (0,7999,8001,32000):
+            with self.subTest(length=length), self.assertRaises(usb.TransferError):
+                usb.pgm(bytes(length))
 
     def test_invalid_ppm(self):
         base = ppm()
@@ -225,14 +259,14 @@ class HostTests(unittest.TestCase):
 
     def test_packet_crc_and_sizes(self):
         self.assertEqual(crc_reference(b"123456789"), 0xCBF43926)
-        for kind, seq, payload, length in [(usb.START,0,b"\x0c",25), (usb.FRAME,1,b"\0"*32000,32024), (usb.STOP,2,b"",24)]:
+        for kind, seq, payload, length in [(usb.START,0,b"\x0c",25), (usb.FRAME,1,b"\xff"*8000,8024), (usb.STOP,2,b"",24)]:
             wire = usb.packet(kind, SESSION, seq, payload)
             self.assertEqual(len(wire), length)
             self.assertEqual(struct.unpack("<I",wire[-4:])[0], crc_reference(wire[:-4]))
         for count in (0,13):
             with self.assertRaises(usb.TransferError):
                 usb.packet(usb.START, SESSION, 0, bytes([count]))
-        for length in (8000,31999,32001):
+        for length in (32000,7999,8001):
             with self.assertRaises(usb.TransferError):
                 usb.packet(usb.FRAME,SESSION,1,b"\0"*length)
 
@@ -247,11 +281,11 @@ class HostTests(unittest.TestCase):
         def emulate(peer):
             peer.handshake(before_rx=lambda:self.replace(2,255))
             frame = peer.packet()
-            self.assertEqual(frame["payload"], b"\xff"*32000)
+            self.assertEqual(frame["payload"], b"\0"*8000)
             peer.send(peer.ack(frame) + peer.done(1), fragment=7)
         metadata, _, raw, _ = self.exchange(emulate)
         self.assertEqual(metadata["frames"][0]["source_sequence"],2)
-        self.assertEqual((metadata["protocol_version"],metadata["bpp"],metadata["payload_bytes"]),(2,4,32000))
+        self.assertEqual((metadata["protocol_version"],metadata["bpp"],metadata["payload_bytes"]),(3,1,8000))
         self.assertIn(b"USB_FRAME_ACK",raw)
         self.assertEqual((self.directory/"capture-first.ppm").read_bytes(),ppm(2,255))
         self.assertEqual((self.directory/"capture-first.pgm").read_bytes(),b"P5\n320 200\n255\n"+b"\xff"*64000)
@@ -261,10 +295,10 @@ class HostTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 for file in self.directory.glob("capture-*"):file.unlink()
                 def emulate(peer):
-                    ready="USB_FRAME_READY version=2 panel=untouched\n"
+                    ready="USB_FRAME_READY version=3 panel=untouched\n"
                     peer.send(ready + ("USB_FRAME_RE" if kind=="partial" else ready if kind=="together" else ""))
                     peer.packet()
-                    if kind=="partial":peer.send("ADY version=2 panel=untouched\n")
+                    if kind=="partial":peer.send("ADY version=3 panel=untouched\n")
                     elif kind=="next_read":peer.send(ready)
                     peer.send(f"USB_FRAME_ACCEPT session={SESSION} max_frames=1\nUSB_FRAME_DELAY_DONE status=pass\nUSB_FRAME_RX session={SESSION}\n")
                     frame=peer.packet();peer.send(peer.ack(frame)+peer.done(1))
@@ -276,14 +310,14 @@ class HostTests(unittest.TestCase):
         def emulate(peer):
             peer.handshake(frames=2)
             a = peer.packet()
-            self.assertEqual(a["payload"], b"\0"*32000)
+            self.assertEqual(a["payload"], b"\xff"*8000)
             self.replace(2,127); self.replace(3,255)
             peer.quiet()
             peer.send(peer.ack(a))
             sent = time.monotonic()
             c = peer.packet()
             self.assertGreaterEqual(c["received_monotonic"]-sent,.250)
-            self.assertEqual(c["payload"], b"\xff"*32000)
+            self.assertEqual(c["payload"], b"\0"*8000)
             peer.send(peer.ack(c)+peer.done(2))
         timings = usb.Deadlines(ready=.3,accept=.3,diagnostic=.4,ack=.2,done=.2,receive_window=.8,pause=.250,after_done=.04)
         metadata, peer, _, _ = self.exchange(emulate,count=2,deadlines=timings)
@@ -309,9 +343,9 @@ class HostTests(unittest.TestCase):
         def emulate(peer):
             peer.handshake(); frame=peer.packet(); peer.send(peer.ack(frame)+peer.done(1))
         metadata,_,_,wire=self.exchange(emulate,patch_write=short_write)
-        self.assertGreater(writes,2400)
-        self.assertEqual(len(wire),25+32024)
-        self.assertEqual(metadata["frames"][0]["transmission"]["bytes_written"],32024)
+        self.assertGreater(writes,600)
+        self.assertEqual(len(wire),25+8024)
+        self.assertEqual(metadata["frames"][0]["transmission"]["bytes_written"],8024)
 
     def test_write_deadline_without_retry(self):
         master,slave=pty.openpty()
@@ -327,7 +361,7 @@ class HostTests(unittest.TestCase):
 
     def test_residual_ready_does_not_extend_accept_deadline(self):
         def emulate(peer):
-            ready="USB_FRAME_READY version=2 panel=untouched\n"
+            ready="USB_FRAME_READY version=3 panel=untouched\n"
             peer.send(ready);peer.packet()
             until=time.monotonic()+.4
             while time.monotonic()<until:
@@ -383,17 +417,18 @@ class HostTests(unittest.TestCase):
                 self.assertEqual(metadata["status"],"오류")
 
     def test_missing_duplicate_and_premature_ack(self):
-        for kind in ("missing","duplicate","premature","v1_fields"):
+        for kind in ("missing","duplicate","premature","v1_fields","v2_fields"):
             with self.subTest(kind=kind):
                 for file in self.directory.glob("capture-*"):file.unlink()
                 def emulate(peer):
                     if kind=="premature":
-                        peer.send("USB_FRAME_READY version=2 panel=untouched\n");peer.packet()
+                        peer.send("USB_FRAME_READY version=3 panel=untouched\n");peer.packet()
                         peer.send(f"USB_FRAME_ACCEPT session={SESSION} max_frames=1\nUSB_FRAME_DELAY_DONE status=pass\nUSB_FRAME_RX session={SESSION}\nUSB_FRAME_ACK seq=1\n")
                         peer.quiet();return
                     peer.handshake();frame=peer.packet();line=peer.ack(frame)
                     if kind=="missing":line=line.replace(" rx_us=100","")
-                    elif kind=="v1_fields":line=line.replace("clear_us","white_us").replace("draw_us","black_us")
+                    elif kind=="v1_fields":line=line.replace(" clear_us=100", "")
+                    elif kind=="v2_fields":line=line.replace(" white_us=150 black_us=150", " draw_us=300")
                     else:line=line.rstrip()+" seq=1\n"
                     peer.send(line);peer.quiet()
                 self.exchange(emulate,error="필드|추가 응답")
@@ -402,7 +437,7 @@ class HostTests(unittest.TestCase):
         for kind in ("accept","rx","delay"):
             with self.subTest(kind=kind):
                 def emulate(peer):
-                    peer.send("USB_FRAME_READY version=2 panel=untouched\n");peer.packet()
+                    peer.send("USB_FRAME_READY version=3 panel=untouched\n");peer.packet()
                     peer.send(f"USB_FRAME_ACCEPT session={9 if kind=='accept' else SESSION} max_frames=1\n")
                     if kind!="accept":
                         peer.send(f"USB_FRAME_DELAY_DONE status={'fail' if kind=='delay' else 'pass'}\n")
@@ -435,30 +470,32 @@ class HostTests(unittest.TestCase):
                     peer.send(line)
                     if kind in ("post","post_stats"):
                         time.sleep(.01)
-                        peer.send("USB_FRAME_STATS metric=unexpected\n" if kind=="post_stats" else "USB_FRAME_READY version=2 panel=untouched\n")
+                        peer.send("USB_FRAME_STATS metric=unexpected\n" if kind=="post_stats" else "USB_FRAME_READY version=3 panel=untouched\n")
                 self.exchange(emulate,error="session|DONE|STOP")
 
     def test_line_buffer_and_error_response(self):
         for line in ("X"*513,"USB_FRAME_ERROR reason=bad_crc\n","USB_FRAME_READY version=1 panel=untouched\n"):
             with self.subTest(line=line[:40]):
                 def emulate(peer):
-                    peer.send("USB_FRAME_READY version=2 panel=untouched\n");peer.packet();peer.send(line)
+                    peer.send("USB_FRAME_READY version=3 panel=untouched\n");peer.packet();peer.send(line)
                 self.exchange(emulate,error="상한|펌웨어 오류|예상하지 않은 응답")
 
     def test_ready_after_accept_is_rejected(self):
         def emulate(peer):
-            peer.send("USB_FRAME_READY version=2 panel=untouched\n");peer.packet()
-            peer.send(f"USB_FRAME_ACCEPT session={SESSION} max_frames=1\nUSB_FRAME_READY version=2 panel=untouched\n")
+            peer.send("USB_FRAME_READY version=3 panel=untouched\n");peer.packet()
+            peer.send(f"USB_FRAME_ACCEPT session={SESSION} max_frames=1\nUSB_FRAME_READY version=3 panel=untouched\n")
         self.exchange(emulate,error="예상 응답")
 
-    def test_v1_ready_never_sends_start(self):
-        def emulate(peer):
-            peer.send("USB_FRAME_READY version=1 panel=untouched\n")
-            peer.quiet()
-        metadata,peer,_,wire=self.exchange(emulate,error="READY 버전",starts=0)
-        self.assertEqual(metadata["start_packets_sent"],0)
-        self.assertEqual(peer.packets,[])
-        self.assertEqual(wire,b"")
+    def test_old_ready_never_sends_start(self):
+        for version in (1, 2):
+            with self.subTest(version=version):
+                def emulate(peer):
+                    peer.send(f"USB_FRAME_READY version={version} panel=untouched\n")
+                    peer.quiet()
+                metadata,peer,_,wire=self.exchange(emulate,error="READY 버전",starts=0)
+                self.assertEqual(metadata["start_packets_sent"],0)
+                self.assertEqual(peer.packets,[])
+                self.assertEqual(wire,b"")
 
     def test_premature_time_limit_is_rejected(self):
         def emulate(peer):
@@ -477,7 +514,7 @@ class HostTests(unittest.TestCase):
         for limit in ("MAX_RAW","MAX_EVENTS"):
             with self.subTest(limit=limit):
                 def emulate(peer):
-                    peer.send("USB_FRAME_READY version=2 panel=untouched\n");peer.packet()
+                    peer.send("USB_FRAME_READY version=3 panel=untouched\n");peer.packet()
                     peer.send("USB_FRAME_STATS metric=diagnostic\n"*8)
                 with mock.patch.object(usb,limit,64 if limit=="MAX_RAW" else 4):
                     self.exchange(emulate,error="로그.*상한")

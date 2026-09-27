@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SDLPoP 최신 PPM을 보정된 16계조로 보내는 제한 USB v2 시험 도구."""
+"""SDLPoP 최신 PPM을 고정 점무늬 흑백으로 보내는 제한 USB v3 시험 도구."""
 
 import argparse
 from dataclasses import dataclass
@@ -21,9 +21,10 @@ import zlib
 
 
 HEADER = struct.Struct("<4sBBHIII")
-VERSION = 2
+VERSION = 3
 START, FRAME, STOP = 1, 2, 3
-PIXEL_BYTES = 32000
+PIXEL_BYTES = 8000
+BAYER = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
 MAX_LINE = 512
 MAX_RAW = 1024 * 1024
 MAX_EVENTS = 4096
@@ -80,7 +81,9 @@ def read_frame(path):
             gray = 12
         elif 1 <= gray <= 13:
             gray += 1
-        packed[pixel // 2] |= gray << ((pixel % 2) * 4)
+        # 화면 좌표에 고정한다. 정지 배경이 프레임 번호 때문에 달라지지 않는다.
+        if gray * 32 < (2 * BAYER[y % 4][x % 4] + 1) * 15:
+            packed[pixel // 8] |= 0x80 >> (x % 8)
     payload = bytes(packed)
     evidence = {
         "source_sequence": int(match.group(1)),
@@ -89,18 +92,19 @@ def read_frame(path):
         "file_mtime_ns": info.st_mtime_ns, "file_bytes": info.st_size,
         "ppm_sha256": hashlib.sha256(raw).hexdigest(),
         "bitmap_sha256": hashlib.sha256(payload).hexdigest(),
-        "bpp": 4, "payload_bytes": PIXEL_BYTES, "pixel_order": "even_x_low_nibble",
+        "bpp": 1, "payload_bytes": PIXEL_BYTES, "pixel_order": "msb_first",
+        "conversion": "corrected_gray_bayer4_fixed", "black": 1, "white": 0,
     }
     return raw, payload, evidence
 
 
 def pgm(payload):
     if len(payload) != PIXEL_BYTES:
-        raise TransferError("4bpp 데이터는 32000바이트여야 합니다")
+        raise TransferError("1bpp 데이터는 8000바이트여야 합니다")
     pixels = bytearray(320 * 200)
     for index, value in enumerate(payload):
-        pixels[index * 2] = (value & 15) * 17
-        pixels[index * 2 + 1] = (value >> 4) * 17
+        for bit in range(8):
+            pixels[index * 8 + bit] = 0 if value & (0x80 >> bit) else 255
     return b"P5\n320 200\n255\n" + pixels
 
 
@@ -248,8 +252,9 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     io = SerialIO(fd, raw_log, tx_log, metadata)
     metadata.update(session=session, max_frames=frames, frames=[], started_at=stamp(),
                     start_packets_sent=0, stop_packets_sent=0, status="진행 중",
-                    protocol_version=VERSION, bpp=4, payload_bytes=PIXEL_BYTES,
-                    pixel_order="even_x_low_nibble", black=0, white=15)
+                    protocol_version=VERSION, bpp=1, payload_bytes=PIXEL_BYTES,
+                    pixel_order="msb_first", black=1, white=0,
+                    conversion="corrected_gray_bayer4_fixed")
     started = False
     acknowledged = applied = 0
     delay_passed = False
@@ -397,14 +402,14 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
                 return finish(values, event)
             if marker != "USB_FRAME_ACK":
                 raise TransferError("FRAME 뒤 ACK가 아닌 응답: " + marker)
-            exact(values, "session seq crc result rx_us display_us clear_us draw_us elapsed_us")
+            exact(values, "session seq crc result rx_us display_us clear_us white_us black_us elapsed_us")
             match_session(values)
             if unsigned(values, "seq") != sequence or values["crc"] != f"{crc:08x}":
                 raise TransferError("ACK sequence·CRC 불일치")
             if values["result"] not in ("applied", "unchanged"):
                 raise TransferError("ACK result 불일치")
-            timings = {key: unsigned(values, key) for key in ("rx_us", "display_us", "clear_us", "draw_us", "elapsed_us")}
-            if timings["clear_us"] + timings["draw_us"] > timings["display_us"] or timings["elapsed_us"] < previous_elapsed:
+            timings = {key: unsigned(values, key) for key in ("rx_us", "display_us", "clear_us", "white_us", "black_us", "elapsed_us")}
+            if timings["clear_us"] + timings["white_us"] + timings["black_us"] > timings["display_us"] or timings["elapsed_us"] < previous_elapsed:
                 raise TransferError("ACK 시간 구간·누적 시간 불일치")
             previous_elapsed = timings["elapsed_us"]
             frame_info["ack"] = {**values, **event}
@@ -424,7 +429,7 @@ def main(argv=None):
     parser.add_argument("--frame-path", type=Path, required=True, help="원자 교체되는 320×200 PPM")
     parser.add_argument("--frames", type=int, default=1, help="최대 프레임 수 1~12 (기본 1)")
     parser.add_argument("--port", help="별도 장치 식별을 완료한 현재 직렬 포트")
-    parser.add_argument("--preview", type=Path, metavar="PGM", help="16계조 PGM 변환만 저장하고 종료; 보드 접근 없음")
+    parser.add_argument("--preview", type=Path, metavar="PGM", help="흑백 점무늬 PGM 변환만 저장하고 종료; 보드 접근 없음")
     parser.add_argument("--log-prefix", type=Path, help="원본·JSON·최초 이미지의 공통 경로")
     args = parser.parse_args(argv)
     if not 1 <= args.frames <= 12:
