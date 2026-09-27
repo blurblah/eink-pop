@@ -61,3 +61,14 @@ python3 tests/test_painter_bounded.py
 `.local/painter_bounded_still_once.py`는 다음 관찰용으로 준비하고 문법 검증만 했다. 사용자 준비 응답 뒤 시작 명령을 한 번 보내고 START→CLEAR→FRAME 1회→DONE·전원OFF 반환과 이후 10초 무출력을 확인한다. 전체 실행 45초 초과·오류·재부팅·추가 출력 시 다운로드 모드로 중단하며 자동 재실행하지 않는다. 아직 이 도구를 실행하지 않았다.
 
 실물 첫 출력은 사용자 관찰 준비 응답 뒤 STILL 한 번이다. 네 상자의 밝기 구분·누락·이상 구동 여부와 마지막 정지를 확인한 뒤 이동 시험 여부를 정한다. 아직 H716에서 속도·잔상 개선을 확인한 것은 아니다.
+
+
+## 첫 시작 중단과 메모리 검사 수정
+
+2026-09-27 23:26 KST, 사용자 “준비됨” 후 `STILL`을 한 번 보냈다. 앱은 `PAINTER_ERROR reason=board_config`를 반환했다. START/CLEAR/FRAME/DONE은 모두 0회이고, 패널 초기화 전 검사에서 종료됐다. 호스트는 다운로드 모드 전환에 성공했고 직렬 포트를 닫았다. 원본 `artifacts/painter-bounded-20260927/still-{runtime.log,result.json,stop.log}`을 보존한다. 화면 출력 성공이나 새 드라이버의 실물 구동 실패로 해석하지 않는다.
+
+원인은 시험 앱이 `ESP.getPsramSize()`를 물리 8MiB와 비교한 것이다. 현재 Arduino 2.0.17의 `cores/esp32/Esp.cpp` 구현은 `heap_caps_get_info()`의 free+allocated 바이트를 반환한다. 힙 관리 공간을 제외하므로 정상 보드에서도 8MiB보다 작다. 과거 정상 실행 로그에서도 8386279/8386295바이트를 확인했다. 첫 오류 로그는 CPU/PSRAM을 구분하지 않았으므로 이번 호출의 수치는 직접 기록되지 않았다.
+
+v2는 `psramFound()` 확인 후 SDK `esp_spiram_get_size()`로 물리 용량을 검사하고, READY에 CPU MHz·물리 PSRAM·힙 크기를 각각 기록한다. 패널 초기화 없이 검사 원인을 확인할 수 있다. 힙 반환값을 실제 기록값 8386279로 바꾼 native 검증과 PSRAM 미인식 사례를 포함해 21개 사례가 통과했다. 메모리 용량 부족·미인식은 계속 거부하며, 실제 캔버스 할당 실패 검사도 유지한다. 드라이버 파형·완료 API는 변경하지 않았다.
+
+v2 빌드 성공: 프로그램 331005바이트, 정적 전역 25848바이트. 앱 331424바이트의 SHA-256은 `6e61fb81a86098889e69d73e574c8c3af7b96aeff7ad6b2346bdc260d3c74db5`다. 부트로더·파티션 해시는 이전과 같다. 기존 v1 빌드·로그를 보존하고 새 결과는 `artifacts/painter-bounded-v2-20260927/`, 빌드는 `.local/build/painter_bounded_v2/`로 분리했다. 수정 후에는 먼저 업로드·READY에서 실제 값을 확인하고, 실물 출력은 다시 관찰 준비를 확인한 뒤 진행한다.

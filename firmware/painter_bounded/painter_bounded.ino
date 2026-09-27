@@ -3,6 +3,7 @@
 #include <EPD_Painter.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+#include <esp32s3/spiram.h>
 
 #if !CONFIG_IDF_TARGET_ESP32S3 || !BOARD_HAS_PSRAM || !ARDUINO_USB_MODE || !ARDUINO_USB_CDC_ON_BOOT
 #error "ESP32-S3, OPI PSRAM, HW CDC 설정이 필요합니다."
@@ -22,8 +23,14 @@ static int64_t started = 0;
 static char command[8];
 static size_t commandUsed = 0;
 
+static uint32_t physicalPsramBytes() {
+    return psramFound() ? esp_spiram_get_size() : 0;
+}
+
 static void ready() {
-    Serial.println("PAINTER_READY version=1 panel=untouched driver=7544e2d board=H716 quality=FAST gray=4 nvs=0");
+    Serial.printf("PAINTER_READY version=2 panel=untouched driver=7544e2d board=H716 quality=FAST gray=4 nvs=0 cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
+                  (unsigned long)getCpuFrequencyMhz(), (unsigned long)physicalPsramBytes(),
+                  (unsigned long)ESP.getPsramSize());
     lastReady = millis();
 }
 
@@ -71,7 +78,7 @@ static void run(bool moving) {
     terminal = true; // 부팅당 한 번. 오류·STOP 뒤에도 다시 시작하지 않는다.
     started = esp_timer_get_time();
     if (Serial.available()) { fail("queued_command"); return; }
-    if (getCpuFrequencyMhz() != 240 || ESP.getPsramSize() < 8388608) {
+    if (getCpuFrequencyMhz() != 240 || physicalPsramBytes() < 8388608) {
         fail("board_config"); return;
     }
     canvas = (uint8_t *)heap_caps_malloc(WIDTH * HEIGHT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

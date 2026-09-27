@@ -30,6 +30,7 @@ extern MockSerial Serial;
 struct MockEsp { uint32_t getPsramSize(); };
 extern MockEsp ESP;
 uint32_t getCpuFrequencyMhz();
+bool psramFound();
 uint32_t millis();
 void delay(uint32_t);
 '''
@@ -124,7 +125,10 @@ void MockSerial::printf(const char* fmt, ...) {
   if(strstr(out,"PAINTER_DONE")==out) assert(!busy && offs==1 && freed==1);
   output+=out;
 }
-uint32_t MockEsp::getPsramSize() { return scenario=="psram"?4194304:8388608; }
+// 물리 용량이 아닌 실기에서 관측한 힙 크기를 반환한다.
+uint32_t MockEsp::getPsramSize() { return scenario=="psram"?4192000:8386279; }
+bool psramFound() { return scenario!="psram_missing"; }
+size_t esp_spiram_get_size() { assert(psramFound()); return scenario=="psram"?4194304:8388608; }
 uint32_t getCpuFrequencyMhz() { return scenario=="cpu"?160:240; }
 uint32_t millis() { return clockUs/1000; }
 void delay(uint32_t ms) { clockUs+=ms*1000; }
@@ -135,7 +139,7 @@ int main(int argc, char** argv) {
   assert(argc==2); scenario=argv[1]; setup();
   for(int i=0;i<2200;++i) loop();
   assert(begins==0 && clears==0 && paints==0 && offs==0);
-  assert(Serial.output.find("PAINTER_READY version=1 panel=untouched")!=std::string::npos);
+  assert(Serial.output.find("PAINTER_READY version=2 panel=untouched")!=std::string::npos);
   Serial.input=scenario=="move"?"MOVE\n":"STILL\n";
   if(scenario=="partial") {
     Serial.input="STI"; loop(); assert(begins==0); Serial.input="LL\r\n";
@@ -145,7 +149,7 @@ int main(int argc, char** argv) {
   if(scenario=="length") Serial.input="STILLLLL\n";
   if(scenario=="queued") Serial.input="STILL\nMOVE\n";
   loop();
-  bool config=scenario=="cpu"||scenario=="psram"||scenario=="alloc_fail"||scenario=="invalid"||scenario=="nul"||scenario=="length"||scenario=="queued";
+  bool config=scenario=="cpu"||scenario=="psram"||scenario=="psram_missing"||scenario=="alloc_fail"||scenario=="invalid"||scenario=="nul"||scenario=="length"||scenario=="queued";
   bool success=scenario=="still"||scenario=="move"||scenario=="partial"||scenario=="two_cycles";
   assert(terminal);
   if(config) assert(begins==0 && offs==0 && paints==0);
@@ -175,13 +179,15 @@ int main(int argc, char** argv) {
 }
 '''
 SCENARIOS = ['still','move','partial','two_cycles','invalid','nul','length','queued',
-             'cpu','psram','alloc_fail','begin_fail','slow_begin','clear_timeout',
+             'cpu','psram','psram_missing','alloc_fail','begin_fail','slow_begin','clear_timeout',
              'paint_timeout','off_fail','zero_cycles','extra_cycles','slow_paint','host_stop']
 
 def main():
     with tempfile.TemporaryDirectory(prefix='eink-painter-sketch-') as tmp:
         p=Path(tmp)
         (p/'Arduino.h').write_text(ARDUINO)
+        (p/'esp32s3').mkdir()
+        (p/'esp32s3/spiram.h').write_text('#pragma once\n#include <cstddef>\nsize_t esp_spiram_get_size();\n')
         (p/'EPD_Painter.h').write_text(EPD)
         (p/'esp_timer.h').write_text('#pragma once\n#include <cstdint>\nint64_t esp_timer_get_time();\n')
         (p/'esp_heap_caps.h').write_text('#pragma once\n#include <cstddef>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\nvoid* heap_caps_malloc(size_t,int);\nvoid heap_caps_free(void*);\n')
