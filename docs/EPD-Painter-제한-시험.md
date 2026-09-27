@@ -233,4 +233,15 @@ H716의 apply 잠재량은 [0,4,5,7]이고 remove는 각각 반대다. 여섯 �
 
 구동은 첫 장 7주사, 후속 10장 12주사·1장 11주사로 오프라인 계산과 일치했다. 실제 행 전송도 passes×540과 같았고 12장 모두 cycles=1이었다. 첫 주기의 프로파일은 rowloop37ms/settle74ms/total111ms였다. 코드의 settle 표기는 전체에서 rowloop를 뺀 값으로, 변경 픽셀 분류 등도 포함한다. 74ms를 순수 의도적 대기나 광학 안정 시간으로 해석할 수 없다. 후속 주기는 rowloop63ms/total71ms(11주사 장은58ms/66ms)였다.
 
-DONE limit/frames=12/poweroff_returned=1과 종료 뒤10.036758초 무출력을 확인하고 포트를 닫았다. 보드는 v4 GAME 실행을 마친 terminal 상태다. 광학 잔상·깜빡임·명암의 전후 차이는 사용자 관찰 대기 중이며 아직 기본 방식 채택을 결정하지 않았다. 원본은 `artifacts/painter-direct-20260928/{game-runtime.log,game-result.json,comparison.json}`, 초기 정리는 `artifacts/painter-direct-clean-20260928/`다.
+DONE limit/frames=12/poweroff_returned=1과 종료 뒤10.036758초 무출력을 확인하고 포트를 닫았다. 보드는 v4 GAME 실행을 마친 terminal 상태다. 사용자는 흐릿함 동일·잔상 그대로, 깜빡임은 처음 로딩할 때만 있고 움직임에서는 없었다고 확인했다. 직접 전이는 속도 후보로 유지하되 잔상·명암 개선으로 판단하지 않는다. 원본은 `artifacts/painter-direct-20260928/{game-runtime.log,game-result.json,comparison.json}`, 초기 정리는 `artifacts/painter-direct-clean-20260928/`다.
+
+
+### NORMAL 직접 전이 비교 준비 (2026-09-28)
+
+FAST 직접 전이의 광학 관찰에서 잔상·흐릿함 개선이 없었으므로, 다음 단일 변수는 기존 H716 NORMAL 품질 모드다. GAME·DIRECT·NORMAL 세 빌드 옵션을 함께 지정하며 v5 READY가 quality=NORMAL/direct=1/같은 clip을 명시한다. setQuality는 begin 전, 직접 전이는 begin 후에 설정한다. 드라이버 소스·전압·핀·파형·클립은 그대로이며 기본 FAST 빌드에는 영향이 없다.
+
+기존 NORMAL apply 장부는 [0,2,4,13], remove는 반대다. 여섯 direct의 길이/순장부는 1→2:6/+2, 1→3:17/+11, 2→1:4/−2, 2→3:15/+9, 3→1:15/−11, 3→2:19/−9로 모두 Q(to)−Q(from)과 일치한다. 같은 실제 클립은 첫13주사·후속 모두19주사다. 4명도 NORMAL의 기본 pass_gap_us_normal=4000µs를 그대로 쓴다. H716 프리셋의 g16_pass_us_normal=20000µs는 16계조 경로이며 이번 시험과 다르다.
+
+이전 FAST 프로파일의 주사당 rowloop 약5.25ms를 차용하면 구동 반복만 첫120.25ms·후속175.75ms로 예상한다. 준비·분류·프로파일·중립 종료 주사 및 광학 응답은 제외한 추정이며, 실제 제출~완료 시간은 더 길 수 있다. 정수 장부 일치와 작성자 단일 패널 보정값은 사용자 패널의 광학 품질·수명 보장이 아니다. 입력 밝기 보정을 동시에 바꾸지 않으므로 관찰 차이는 이 모드 변경 범위에서 판단한다.
+
+실제 스케치 90사례(기본/게임/직접/NORMAL)가 ASan/UBSan으로 통과했다. 선택 품질·초기화 순서, 직접 설정 실패 때 프레임0장 및 OFF, 모든 확대 픽셀·종료 한도를 확인했다. ESP32 앱은524048바이트 SHA-256 `6cf4afa554c6d86b85da94d21c5da75a9e4a59ca07814324c7ee14f99e6bf012`, 프로그램523629바이트·정적 전역25848바이트다. 생성 헤더와 192000바이트 게임 데이터가 이전 클립과 동일하고 바이너리에 한 벌만 있음을 확인했다. 근거는 `artifacts/painter-normal-20260928/{waveform-review.json,sketch-tests.log,build.log,build-verification.json}` 및 `.local/build/painter_normal/`에 보존한다. 아직 실물 NORMAL 실행 전이다.

@@ -1,4 +1,4 @@
-// H716 FAST 4명도 제한 시험. 유효한 명령 전에는 begin()도 호출하지 않는다.
+// H716 4명도 제한 시험. 유효한 명령 전에는 begin()도 호출하지 않는다.
 #include <Arduino.h>
 #include <EPD_Painter.h>
 #include <esp_heap_caps.h>
@@ -6,6 +6,9 @@
 #include <esp32s3/spiram.h>
 #if defined(EINK_PAINTER_DIRECT) && !defined(EINK_PAINTER_GAME)
 #error "직접 전이 비교는 동일 GAME 입력 빌드에서만 활성화합니다."
+#endif
+#if defined(EINK_PAINTER_NORMAL) && !defined(EINK_PAINTER_DIRECT)
+#error "NORMAL 비교는 동일 GAME 직접 전이 빌드에서만 활성화합니다."
 #endif
 #ifdef EINK_PAINTER_GAME
 #include <painter_game_frames.h>
@@ -37,7 +40,9 @@ static uint32_t physicalPsramBytes() {
 
 static void ready() {
 #ifdef EINK_PAINTER_GAME
-#ifdef EINK_PAINTER_DIRECT
+#ifdef EINK_PAINTER_NORMAL
+    Serial.printf("PAINTER_READY version=5 panel=untouched driver=7544e2d board=H716 quality=NORMAL gray=4 nvs=0 direct=1 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
+#elif defined(EINK_PAINTER_DIRECT)
     Serial.printf("PAINTER_READY version=4 panel=untouched driver=7544e2d board=H716 quality=FAST gray=4 nvs=0 direct=1 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
 #else
     Serial.printf("PAINTER_READY version=3 panel=untouched driver=7544e2d board=H716 quality=FAST gray=4 nvs=0 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
@@ -121,7 +126,11 @@ static void run(uint8_t mode) {
     // 클래스 기본 AUTO가 있어도 명시한 H716 설정 때문에 탐색 전에 반환한다.
     panel.setAutoShutdown(false);
     panel.setIdleTimeout(60); // 30초 시험 중 기본 5초 타이머가 레일을 끄지 않도록 한다.
+#ifdef EINK_PAINTER_NORMAL
+    panel.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+#else
     panel.setQuality(EPD_Painter::Quality::QUALITY_FAST);
+#endif
     panel.setPaintProfile(true);
     if (!panel.begin()) { fail("begin_failed"); return; }
     initialized = true;

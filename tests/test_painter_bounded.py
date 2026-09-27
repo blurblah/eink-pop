@@ -40,7 +40,7 @@ EPD = r'''
 #define EPD_LILYGO_EPD47_H716_PRESET 716
 class EPD_Painter {
 public:
-  enum class Quality { QUALITY_FAST };
+  enum class Quality { QUALITY_FAST, QUALITY_NORMAL };
   explicit EPD_Painter(int preset);
   void setAutoShutdown(bool);
   void setIdleTimeout(int);
@@ -67,7 +67,7 @@ HARNESS = r'''
 static std::string scenario;
 static int64_t clockUs=0;
 static int begins=0, clears=0, paints=0, offs=0, freed=0, completed=0;
-static bool autoOff=true, fast=false, buffers=false, busy=false;
+static bool autoOff=true, qualitySet=false, buffers=false, busy=false;
 static int idleSeconds=0, directCalls=0;
 MockSerial Serial;
 MockEsp ESP;
@@ -75,9 +75,17 @@ MockEsp ESP;
 EPD_Painter::EPD_Painter(int p) { assert(p==716); }
 void EPD_Painter::setAutoShutdown(bool b) { autoOff=b; }
 void EPD_Painter::setIdleTimeout(int s) { idleSeconds=s; }
-void EPD_Painter::setQuality(Quality) { fast=true; }
+void EPD_Painter::setQuality(Quality q) {
+  assert(begins==0 && !qualitySet);
+#ifdef EINK_PAINTER_NORMAL
+  assert(q==Quality::QUALITY_NORMAL);
+#else
+  assert(q==Quality::QUALITY_FAST);
+#endif
+  qualitySet=true;
+}
 bool EPD_Painter::begin() {
-  assert(!autoOff && fast && idleSeconds==60); ++begins;
+  assert(!autoOff && qualitySet && idleSeconds==60); ++begins;
   if(scenario=="slow_begin") clockUs+=31000000;
   return scenario!="begin_fail";
 }
@@ -154,7 +162,10 @@ int main(int argc, char** argv) {
   assert(argc==2); scenario=argv[1]; setup();
   for(int i=0;i<2200;++i) loop();
   assert(begins==0 && clears==0 && paints==0 && offs==0);
-  #ifdef EINK_PAINTER_DIRECT
+#ifdef EINK_PAINTER_NORMAL
+  assert(Serial.output.find("PAINTER_READY version=5 panel=untouched")!=std::string::npos);
+  assert(Serial.output.find("quality=NORMAL gray=4 nvs=0 direct=1 clip=fixture")!=std::string::npos);
+#elif defined(EINK_PAINTER_DIRECT)
   assert(Serial.output.find("PAINTER_READY version=4 panel=untouched")!=std::string::npos);
 #elif defined(EINK_PAINTER_GAME)
   assert(Serial.output.find("PAINTER_READY version=3 panel=untouched")!=std::string::npos);
@@ -225,16 +236,17 @@ def main():
             rows.append('{'+','.join(map(str,packed))+'}')
         (p/'painter_game_frames.h').write_text('#pragma once\n#define GAME_CLIP_ID "fixture"\nstatic constexpr uint32_t GAME_FRAME_COUNT=12;\nstatic const uint8_t GAME_PACKED[12][16000]={'+','.join(rows)+'};\n')
         cases=0
-        for game_build in (False,True,"direct"):
+        for game_build in (False,True,"direct","normal"):
             subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',tmp,
                             *(['-DEINK_PAINTER_GAME'] if game_build else []),
-                            *(['-DEINK_PAINTER_DIRECT'] if game_build=='direct' else []),
+                            *(['-DEINK_PAINTER_DIRECT'] if game_build in ('direct','normal') else []),
+                            *(['-DEINK_PAINTER_NORMAL'] if game_build=='normal' else []),
                             f'-DSKETCH_PATH="{ROOT / "firmware/painter_bounded/painter_bounded.ino"}"',
                             str(p/'check.cpp'),'-o',str(p/'check')],check=True)
-            for scenario in SCENARIOS+(['game'] if game_build else ['unsupported_game'])+(['direct_fail'] if game_build=='direct' else []):
+            for scenario in SCENARIOS+(['game'] if game_build else ['unsupported_game'])+(['direct_fail'] if game_build in ('direct','normal') else []):
                 subprocess.run([str(p/'check'),scenario],check=True,timeout=10)
                 cases+=1
-        print(f'실제 스케치 {cases}개 사례 통과 (기본/게임/direct 빌드, 확대 픽셀 전체 비교 포함)')
+        print(f'실제 스케치 {cases}개 사례 통과 (기본/게임/direct/NORMAL 빌드, 확대 픽셀 전체 비교 포함)')
 
 if __name__=='__main__':
     main()

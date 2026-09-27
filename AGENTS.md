@@ -26,7 +26,7 @@
 ## 소스와 산출물 보존
 
 - 드라이버 정본 작업 경로는 `repos/LilyGo-EPD47`, 게임 정본 작업 경로는 `repos/SDLPoP`다. 두 저장소는 독립 Git submodule이며 수정은 각각 작업 브랜치에서 한다. 브랜치·원격·기준 커밋은 `docs/저장소-구성과-작업-브랜치.md`를 확인한다.
-- 고속 드라이버 시험 정본은 `repos/EPD_Painter` submodule의 `codex/eink-pop-bounded-test` 브랜치다. H716 설정 객체·FAST 4명도·자동 BootCtl 비활성화를 유지하고, 첫 출력은 관찰 준비 후 정지 패턴 한 장으로 제한한다. 제조사 드라이버와 별개다.
+- 고속 드라이버 시험 정본은 `repos/EPD_Painter` submodule의 `codex/eink-pop-bounded-test` 브랜치다. H716 설정 객체·4명도·자동 BootCtl 비활성화를 유지한다. 기본은 FAST이며 동일 입력의 NORMAL 직접 전이 비교는 별도 빌드로 제한한다. 첫 정지 출력 이후에도 최대 12장·한 번 실행과 전원 종료를 유지한다. 제조사 드라이버와 별개다.
 - `/Users/blurblah/workspace/SDLPoP`는 이관 전 원본으로 보존한다. 기존 `src/common.h` 사용자 변경은 새 SDLPoP 작업 브랜치에 이관·커밋했으며, 원본의 수정·브랜치를 자동으로 되돌리지 않는다.
 - 상위 프로젝트와 하위 저장소의 관련 변경은 로컬 커밋으로 남긴다. 하위 변경을 먼저 커밋하고 상위에서 사용 커밋을 갱신한다. 사용자가 별도로 변경 지시하기 전에는 push하지 않는다.
 - 로컬 전용 하위 커밋은 공식 GitHub URL에서 받을 수 없으므로 `.git/modules/`를 포함한 현재 Git 객체를 보존한다. 기존 `.local/libraries/LilyGo-EPD47`와 첫 시험 산출물은 과거 검증의 재현 자료다.
