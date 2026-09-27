@@ -56,6 +56,8 @@ python3 tests/test_painter_bounded.py
 
 ## 실물 진행 상태
 
-업로드 전이다. 업로드 도구 `.local/painter_bounded_upload_ready.py`는 백업·복구 앱·새 빌드·동일 USB 장치를 다시 확인하고 한 번만 업로드한다. 4개 Flash 해시 검증 후 8초 이상 READY를 관찰하며 시작 명령은 전송하지 않는다. 오류 시 자동 재시험하지 않는다.
+2026-09-27 23:07 KST에 업로드를 한 번 마쳤다. `.local/painter_bounded_upload_ready.py`로 출고 백업·복구 앱·새 빌드·동일 USB 장치를 재확인했고, Flash 해시 검증 4개가 성공했다. READY를 8.052789초 동안 10회 수신했으며 버전·H716·드라이버 `7544e2d`·FAST·4명도·NVS 비활성화를 확인했다. **시작 명령 전송은 0회**이고 패널은 초기화·출력하지 않았다. 직렬 포트는 닫혔다. 기록은 `artifacts/painter-bounded-20260927/{upload.log,ready.log,upload-result.json}`이다.
+
+`.local/painter_bounded_still_once.py`는 다음 관찰용으로 준비하고 문법 검증만 했다. 사용자 준비 응답 뒤 시작 명령을 한 번 보내고 START→CLEAR→FRAME 1회→DONE·전원OFF 반환과 이후 10초 무출력을 확인한다. 전체 실행 45초 초과·오류·재부팅·추가 출력 시 다운로드 모드로 중단하며 자동 재실행하지 않는다. 아직 이 도구를 실행하지 않았다.
 
 실물 첫 출력은 사용자 관찰 준비 응답 뒤 STILL 한 번이다. 네 상자의 밝기 구분·누락·이상 구동 여부와 마지막 정지를 확인한 뒤 이동 시험 여부를 정한다. 아직 H716에서 속도·잔상 개선을 확인한 것은 아니다.
