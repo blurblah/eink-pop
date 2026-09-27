@@ -324,6 +324,50 @@ class HostTests(unittest.TestCase):
         self.assertEqual([f["source_sequence"] for f in metadata["frames"]],[1,3])
         self.assertEqual([p["seq"] for p in peer.packets],[0,1,2])
 
+    def test_empty_lines_before_accept_with_queued_ready(self):
+        def emulate(peer):
+            ready = "USB_FRAME_READY version=3 panel=untouched\r\n"
+            peer.send("FRAME_READY version=3 panel=untouched\r\n" + ready * 5 + "\r\n")
+            self.assertEqual(peer.packet()["type"], usb.START)
+            peer.send(f"\nUSB_FRAME_ACCEPT session={SESSION} max_frames=1\r\n", fragment=3)
+            peer.send(f"USB_FRAME_DELAY_DONE status=pass\nUSB_FRAME_RX session={SESSION}\n")
+            frame = peer.packet()
+            peer.send(peer.ack(frame) + peer.done(1))
+        metadata, peer, raw, _ = self.exchange(emulate)
+        self.assertEqual([p["type"] for p in peer.packets], [usb.START, usb.FRAME])
+        self.assertEqual(sum(e["line"] == "" for e in metadata["responses"]), 2)
+        self.assertIn(b"\r\n\r\n", raw)
+
+    def test_empty_accept_does_not_extend_deadline(self):
+        def emulate(peer):
+            peer.send("USB_FRAME_READY version=3 panel=untouched\n")
+            peer.packet()
+            for _ in range(20):
+                peer.send("\r\n")
+                time.sleep(.025)
+        metadata, peer, _, _ = self.exchange(emulate, error="시간초과")
+        self.assertEqual(len(peer.packets), 1)
+        events = metadata["responses"]
+        self.assertLess(events[-1]["received_monotonic"] - events[0]["received_monotonic"], .45)
+
+    def test_empty_line_exception_preserves_strict_responses(self):
+        for kind in ("space", "reboot", "panic", "after_accept", "after_done"):
+            with self.subTest(kind=kind):
+                for file in self.directory.glob("capture-*"): file.unlink()
+                def emulate(peer):
+                    if kind == "after_done":
+                        peer.handshake(); frame = peer.packet()
+                        peer.send(peer.ack(frame) + peer.done(1) + "\r\n")
+                        return
+                    peer.send("USB_FRAME_READY version=3 panel=untouched\n")
+                    peer.packet()
+                    peer.send("\r\n")
+                    if kind == "space": peer.send(" \r\n")
+                    elif kind == "reboot": peer.send("ESP-ROM:esp32s3\n")
+                    elif kind == "panic": peer.send("Guru Meditation Error\n")
+                    else: peer.send(f"USB_FRAME_ACCEPT session={SESSION} max_frames=1\n\r\n")
+                self.exchange(emulate, error="공백|재부팅|펌웨어 중단")
+
     def test_same_source_sequence_unchanged_counts(self):
         def emulate(peer):
             peer.handshake(frames=2)

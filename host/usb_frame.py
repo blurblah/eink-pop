@@ -261,7 +261,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     delay_passed = False
     previous_elapsed = 0
 
-    def response(deadline, boot=False, allow_stats=True):
+    def response(deadline, boot=False, allow_stats=True, allow_empty=False):
         while True:
             line, event = io.line(deadline)
             lower = line.lower()
@@ -270,6 +270,9 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             if started and ("ESP-ROM:" in line or "rst:0x" in line):
                 raise TransferError("START 뒤 재부팅 로그")
             if boot and not line.startswith("USB_FRAME_"):
+                continue
+            if allow_empty and line == "":
+                # ACCEPT 전 남은 빈 줄만 허용한다. 마감·응답 로그 상한은 유지한다.
                 continue
             marker, values = fields_of(line)
             if marker == "USB_FRAME_ERROR":
@@ -333,7 +336,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         started = True
         accept_end = time.monotonic() + deadlines.accept
         while True:
-            marker, values, _ = response(accept_end)
+            marker, values, _ = response(accept_end, allow_empty=True)
             if marker == "USB_FRAME_READY" and values == {"version": str(VERSION), "panel": "untouched"}:
                 # START 이전에 커널·부분 줄에 남은 READY를 허용한다. 마감·START는 갱신하지 않는다.
                 continue
