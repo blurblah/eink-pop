@@ -1,0 +1,113 @@
+"""기존 직렬 I/O 위의 v4 상태·CRC·최신 읽기·종료 계약 검증."""
+import json
+from pathlib import Path
+import struct
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+import zlib
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'host'))
+import painter_usb as p
+
+class Peer:
+    def __init__(self, fault='', stop=False):
+        self.fault=fault; self.pending=bytearray(); self.queue=[]; self.sent=[]
+        self.acks=0;self.n=0;self.applied=0;self.total=2;self.previous=bytes(16000)
+        ready=p.READY.copy()
+        if fault=='ready':ready['version']='3'
+        self.emit('READY',ready)
+    def emit(self,marker,v):self.queue.append('PAINTER_USB_'+marker+' '+' '.join(f'{k}={x}' for k,x in v.items()))
+    def line(self,deadline):
+        if not self.queue:
+            if self.fault=='partial': self.pending.extend(b'x')
+            raise p.ResponseTimeout('시험 마감')
+        line=self.queue.pop(0)
+        if line.startswith('PAINTER_USB_ACK'):self.acks+=1
+        return line,dict(received_monotonic=time.monotonic(),line=line)
+    def write_all(self,wire,deadline):
+        self.sent.append(wire)
+        magic,version,kind,flags,session,seq,n=p.HEADER.unpack(wire[:20])
+        assert magic==b'EPK1' and version==4 and flags==0 and n==len(wire)-24
+        assert zlib.crc32(wire[:-4])&0xffffffff==struct.unpack('<I',wire[-4:])[0]
+        if kind==p.START:
+            self.total=wire[20]
+            self.emit('ACCEPT',dict(session=session+(self.fault=='session'),max_frames=self.total+(self.fault=='limit')))
+            self.emit('RX',dict(session=session))
+        elif kind==p.STOP:
+            self.emit('DONE',dict(session=session,reason='stop',frames=self.n,applied=self.applied,poweroff_returned=int(self.n>0)))
+        else:
+            assert self.acks==self.n
+            self.n+=1;payload=wire[20:-4];changed=payload!=self.previous
+            v=dict(session=session,seq=seq,crc=f'{zlib.crc32(wire[:-4])&0xffffffff:08x}',result='applied' if self.n==1 or changed else 'unchanged',rx_us=100,display_us=400,clear_us=100 if self.n==1 else 0,prepare_us=10 if changed else 0,paint_us=200 if changed else 0,cycles=int(changed),elapsed_us=self.n*400)
+            self.applied+=self.n==1 or changed
+            self.previous=payload
+            if self.fault=='crc':v['crc']='00000000'
+            if self.fault=='sequence':v['seq']=99
+            if self.fault=='cycle':v['cycles']=0
+            if self.fault=='timing':v['paint_us']=1000
+            if self.fault=='initial_clear':v['clear_us']=0
+            if self.fault=='repeat_clear' and self.n==2:v['clear_us']=100
+            if self.fault=='result':v['result']='unchanged'
+            if self.fault=='reboot':self.queue.append('ESP-ROM: reboot')
+            if self.fault=='error':self.emit('ERROR',dict(reason='paint_timeout'))
+            self.emit('ACK',v)
+            if self.n==self.total:
+                self.emit('DONE',dict(session=session,reason='limit',frames=self.n+(self.fault=='done_count'),applied=self.applied,poweroff_returned=0 if self.fault=='off' else 1))
+                if self.fault=='extra':self.queue.append('late output')
+        return dict(bytes=len(wire),bytes_written=len(wire),send_started_monotonic=time.monotonic())
+
+class Tests(unittest.TestCase):
+    def run_peer(self,fault='',stop=False,same=False):
+        peer=Peer(fault);meta={};reads=[]
+        def reader(_):
+            self.assertEqual(len(reads),peer.acks) # 완료 응답을 소비한 뒤에만 최신 파일 읽기
+            seq=(4,9)[len(reads)];reads.append(seq)
+            data=bytes([0x1b if same or len(reads)==1 else 0xe4])*16000
+            return b'raw',data,dict(source_sequence=seq)
+        with patch.object(p,'SerialIO',return_value=peer):
+            result=p.run_session(-1,'unused',2,123,meta,frame_reader=reader,after_done=0,
+                                 stop_requested=(lambda:bool(peer.sent)) if stop else (lambda:False))
+        return result,peer,reads
+    def test_latest_after_ack(self):
+        r,peer,reads=self.run_peer();self.assertEqual(reads,[4,9]);self.assertEqual(r['status'],'통과')
+        self.assertEqual(len(peer.sent),3);self.assertEqual(r['done']['frames'],'2')
+    def test_unchanged(self):
+        r,_,_=self.run_peer(same=True);self.assertEqual(r['frames'][1]['ack']['result'],'unchanged')
+    def test_stop_before_frame(self):
+        r,peer,reads=self.run_peer(stop=True);self.assertEqual(reads,[]);self.assertEqual(r['done']['poweroff_returned'],'0')
+    def test_failures(self):
+        for fault in ('ready','session','limit','crc','sequence','cycle','timing','initial_clear','repeat_clear','result','reboot','error','done_count','off','extra','partial'):
+            with self.subTest(fault=fault),self.assertRaises(p.TransferError):self.run_peer(fault)
+    def test_source_reversal(self):
+        peer=Peer();reads=0
+        def reader(_):
+            nonlocal reads
+            reads+=1
+            return b'raw',bytes([0x1b])*16000,dict(source_sequence=9 if reads==1 else 4)
+        with patch.object(p,'SerialIO',return_value=peer),self.assertRaisesRegex(p.TransferError,'역행'):
+            p.run_session(-1,'unused',2,123,{},frame_reader=reader,after_done=0)
+        self.assertEqual(len(peer.sent),2) # START와 첫FRAME 이후 잘못된 원본 미전송
+    def test_cancel_before_start(self):
+        peer=Peer()
+        with patch.object(p,'SerialIO',return_value=peer):
+            r=p.run_session(-1,'unused',2,123,{},stop_requested=lambda:True)
+        self.assertEqual(r['status'],'시작 전 취소');self.assertEqual(peer.sent,[])
+    def test_wire(self):
+        for kind,seq,payload in ((p.START,0,b'\x0c'),(p.FRAME,1,bytes(16000)),(p.STOP,2,b'')):
+            wire=p.packet(kind,123,seq,payload)
+            self.assertEqual(wire[:6],b'EPK1\x04'+bytes([kind]))
+            self.assertEqual(struct.unpack('<I',wire[-4:])[0],zlib.crc32(wire[:-4])&0xffffffff)
+        for args in ((p.FRAME,1,1,bytes(8000)),(p.START,1,0,b'\x0d'),(p.STOP,0,1,b'')):
+            with self.assertRaises(p.TransferError):p.packet(*args)
+    def test_ppm_same_conversion(self):
+        with tempfile.TemporaryDirectory() as d:
+            f=Path(d)/'frame.ppm';rgb=bytes(range(256))*750
+            f.write_bytes(b'P6\n# eink sequence 9\n320 200\n255\n'+rgb)
+            raw,payload,info=p.read_frame(f)
+            self.assertEqual(payload,p.convert(rgb));self.assertEqual(info['source_sequence'],9)
+            f.write_bytes(raw[:-1])
+            with self.assertRaises(p.TransferError):p.read_frame(f)
+
+if __name__=='__main__':unittest.main()
