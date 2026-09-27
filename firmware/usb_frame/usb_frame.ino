@@ -1,7 +1,7 @@
 /**
  * EPK1 v3 제한 USB 흑백 수신: 최초 전체 지우기 후 바뀐 픽셀만 두 패스로 출력.
  * 드라이버: https://github.com/Xinyuan-LilyGO/LilyGo-EPD47
- * 기준 커밋: f1607dab2df95295e6b50fc0e44c4c092a13938f (GNU GPL v3).
+ * 기준 커밋: 9b8dcdba04ed03ee70dba412667803b1dac1adfd (GNU GPL v3).
  * 출처·저작권은 드라이버 원본 LICENSE를 따른다.
  * ACK는 호출 반환 기준이며 광학 전환 완료 또는 패널 무손상을 보장하지 않는다.
  */
@@ -237,7 +237,7 @@ static void beginSession(uint32_t id)
     frameLimit = startPayload;
     Serial.printf("USB_FRAME_ACCEPT session=%lu max_frames=%lu\r\n",
                   (unsigned long)session, (unsigned long)frameLimit);
-    Serial.printf("USB_FRAME_STATS metric=config arduino=%d.%d.%d driver=f1607dab2df95295e6b50fc0e44c4c092a13938f source=320x200 bpp=1 msb_first=1 black=1 white=0 scale=2 x=160 y=70 rx_bytes=32768 mask_bytes=192000 refresh=initial_clear_then_delta\r\n",
+    Serial.printf("USB_FRAME_STATS metric=config arduino=%d.%d.%d driver=9b8dcdba04ed03ee70dba412667803b1dac1adfd source=320x200 bpp=1 msb_first=1 black=1 white=0 scale=2 x=160 y=70 rx_bytes=32768 mask_bytes=192000 refresh=initial_clear_then_delta\r\n",
                   ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH);
     Serial.printf("USB_FRAME_STATS metric=memory flash_bytes=%lu psram_bytes=%lu free_psram_bytes=%lu free_heap_bytes=%lu\r\n",
                   (unsigned long)ESP.getFlashChipSize(), (unsigned long)ESP.getPsramSize(),
