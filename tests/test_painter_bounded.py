@@ -54,6 +54,7 @@ public:
   bool powerOffWhenIdle(uint32_t);
   uint32_t paintsCompleted() const;
   void paint(uint8_t*);
+  void paintPacked(const uint8_t*, int);
 };
 '''
 HARNESS = r'''
@@ -129,14 +130,17 @@ bool EPD_Painter::powerOffWhenIdle(uint32_t ms) {
   busy=false; return true;
 }
 uint32_t EPD_Painter::paintsCompleted() const { return completed; }
-void EPD_Painter::paint(uint8_t* pixels) {
+static void checkPixels(const uint8_t* pixels, bool packed) {
   assert(!busy && clears==1 && offs==0);
   const bool moving=scenario=="move";
   for(int y=0;y<540;++y) for(int x=0;x<960;++x) {
     int expected=0;
     if(scenario=="game") {
-      if(x>=160 && x<800 && y>=70 && y<470)
-        expected=((x-160)/2+3*((y-70)/2)+paints)%4;
+      if(x>=160 && x<800 && y>=70 && y<470) {
+        int sx=(x-160)/2, sy=(y-70)/2;
+        int byte=(sx/4+sy*80+paints*16000)%256;
+        expected=(byte >> (6-2*(sx%4)))&3;
+      }
     } else if(moving) {
       if(x>=200+paints*16 && x<264+paints*16 && y>=240 && y<304) expected=3;
     } else {
@@ -146,10 +150,24 @@ void EPD_Painter::paint(uint8_t* pixels) {
       }
       if(y>=330 && y<334 && x>=200 && x<720) expected=3;
     }
-    assert(pixels[y*960+x]==expected);
+    const int pixel=y*960+x;
+    const int actual=packed?((pixels[pixel/4] >> (6-2*(pixel%4)))&3):pixels[pixel];
+    assert(actual==expected);
   }
   ++paints; busy=true; clockUs+=1000;
   if(scenario=="slow_paint") clockUs+=31000000;
+}
+void EPD_Painter::paint(uint8_t* pixels) {
+#ifdef EINK_PAINTER_PACKED
+  assert(false && "압축 빌드가 비압축 API를 호출함");
+#endif
+  checkPixels(pixels, false);
+}
+void EPD_Painter::paintPacked(const uint8_t* pixels, int repeat) {
+#ifndef EINK_PAINTER_PACKED
+  assert(false && "기존 빌드가 압축 API를 호출함");
+#endif
+  assert(repeat==1); checkPixels(pixels, true);
 }
 void MockSerial::println(const char* s) { output+=std::string(s)+"\n"; }
 void MockSerial::printf(const char* fmt, ...) {
@@ -166,13 +184,23 @@ uint32_t getCpuFrequencyMhz() { return scenario=="cpu"?160:240; }
 uint32_t millis() { return clockUs/1000; }
 void delay(uint32_t ms) { if(scenario=="game") assert(ms!=100); clockUs+=ms*1000; }
 int64_t esp_timer_get_time() { return clockUs; }
-void* heap_caps_malloc(size_t n, int) { return scenario=="alloc_fail"?nullptr:malloc(n); }
+void* heap_caps_malloc(size_t n, int) {
+#ifdef EINK_PAINTER_PACKED
+  assert(n==129600);
+#else
+  assert(n==518400);
+#endif
+  return scenario=="alloc_fail"?nullptr:malloc(n);
+}
 void heap_caps_free(void* p) { ++freed; free(p); }
 int main(int argc, char** argv) {
   assert(argc==2); scenario=argv[1]; setup();
   for(int i=0;i<2200;++i) loop();
   assert(begins==0 && clears==0 && paints==0 && offs==0);
-#ifdef EINK_PAINTER_NORMAL
+#ifdef EINK_PAINTER_PACKED
+  assert(Serial.output.find("PAINTER_READY version=7 panel=untouched")!=std::string::npos);
+  assert(Serial.output.find("quality=NORMAL gray=4 nvs=0 direct=1 profile=0 packed=1 clip=fixture")!=std::string::npos);
+#elif defined(EINK_PAINTER_NORMAL)
   assert(Serial.output.find("PAINTER_READY version=6 panel=untouched")!=std::string::npos);
   assert(Serial.output.find("quality=NORMAL gray=4 nvs=0 direct=1 profile=0 clip=fixture")!=std::string::npos);
 #elif defined(EINK_PAINTER_DIRECT)
@@ -239,24 +267,23 @@ def main():
         # 게임 빌드에서는 위치·프레임별로 다른 4명도 값을 전체 픽셀에서 대조한다.
         rows=[]
         for frame in range(12):
-            packed=[]
-            for y in range(200):
-                for x in range(0,320,4):
-                    packed.append(sum(((x+k+3*y+frame)%4) << (6-2*k) for k in range(4)))
+            packed=[(i+frame*16000)%256 for i in range(16000)]
+            assert set(packed)==set(range(256)) # 전체2bpp 바이트 조합
             rows.append('{'+','.join(map(str,packed))+'}')
         (p/'painter_game_frames.h').write_text('#pragma once\n#define GAME_CLIP_ID "fixture"\nstatic constexpr uint32_t GAME_FRAME_COUNT=12;\nstatic const uint8_t GAME_PACKED[12][16000]={'+','.join(rows)+'};\n')
         cases=0
-        for game_build in (False,True,"direct","normal"):
+        for game_build in (False,True,"direct","normal","packed"):
             subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',tmp,
                             *(['-DEINK_PAINTER_GAME'] if game_build else []),
-                            *(['-DEINK_PAINTER_DIRECT'] if game_build in ('direct','normal') else []),
-                            *(['-DEINK_PAINTER_NORMAL'] if game_build=='normal' else []),
+                            *(['-DEINK_PAINTER_DIRECT'] if game_build in ('direct','normal','packed') else []),
+                            *(['-DEINK_PAINTER_NORMAL'] if game_build in ('normal','packed') else []),
+                            *(['-DEINK_PAINTER_PACKED'] if game_build=='packed' else []),
                             f'-DSKETCH_PATH="{ROOT / "firmware/painter_bounded/painter_bounded.ino"}"',
                             str(p/'check.cpp'),'-o',str(p/'check')],check=True)
-            for scenario in SCENARIOS+(['game'] if game_build else ['unsupported_game'])+(['direct_fail'] if game_build in ('direct','normal') else []):
+            for scenario in SCENARIOS+(['game'] if game_build else ['unsupported_game'])+(['direct_fail'] if game_build in ('direct','normal','packed') else []):
                 subprocess.run([str(p/'check'),scenario],check=True,timeout=10)
                 cases+=1
-        print(f'실제 스케치 {cases}개 사례 통과 (기본/게임/direct/NORMAL 빌드, 확대 픽셀 전체 비교 포함)')
+        print(f'실제 스케치 {cases}개 사례 통과 (기본/게임/direct/NORMAL/packed 빌드, 256바이트 조합·확대 픽셀 전체 비교 포함)')
 
 if __name__=='__main__':
     main()

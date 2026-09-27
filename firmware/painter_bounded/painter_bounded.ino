@@ -10,6 +10,9 @@
 #if defined(EINK_PAINTER_NORMAL) && !defined(EINK_PAINTER_DIRECT)
 #error "NORMAL 비교는 동일 GAME 직접 전이 빌드에서만 활성화합니다."
 #endif
+#if defined(EINK_PAINTER_PACKED) && !defined(EINK_PAINTER_NORMAL)
+#error "압축 입력 비교는 NORMAL 직접 전이 빌드에서만 활성화합니다."
+#endif
 #ifdef EINK_PAINTER_GAME
 #include <painter_game_frames.h>
 static_assert(GAME_FRAME_COUNT == 12 && sizeof(GAME_PACKED) == 12 * 16000,
@@ -26,6 +29,11 @@ static_assert(GAME_FRAME_COUNT == 12 && sizeof(GAME_PACKED) == 12 * 16000,
 static constexpr uint32_t LIMIT_US = 30000000;
 static constexpr uint32_t WAIT_MS = 5000;
 static constexpr int WIDTH = 960, HEIGHT = 540;
+#ifdef EINK_PAINTER_PACKED
+static constexpr size_t CANVAS_BYTES = WIDTH * HEIGHT / 4;
+#else
+static constexpr size_t CANVAS_BYTES = WIDTH * HEIGHT;
+#endif
 static EPD_Painter panel(EPD_LILYGO_EPD47_H716_PRESET);
 static uint8_t *canvas = nullptr;
 static bool terminal = false, initialized = false;
@@ -40,7 +48,9 @@ static uint32_t physicalPsramBytes() {
 
 static void ready() {
 #ifdef EINK_PAINTER_GAME
-#ifdef EINK_PAINTER_NORMAL
+#ifdef EINK_PAINTER_PACKED
+    Serial.printf("PAINTER_READY version=7 panel=untouched driver=7544e2d board=H716 quality=NORMAL gray=4 nvs=0 direct=1 profile=0 packed=1 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
+#elif defined(EINK_PAINTER_NORMAL)
     Serial.printf("PAINTER_READY version=6 panel=untouched driver=7544e2d board=H716 quality=NORMAL gray=4 nvs=0 direct=1 profile=0 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
 #elif defined(EINK_PAINTER_DIRECT)
     Serial.printf("PAINTER_READY version=4 panel=untouched driver=7544e2d board=H716 quality=FAST gray=4 nvs=0 direct=1 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
@@ -78,14 +88,35 @@ static void fail(const char *reason) {
 static bool expired() { return esp_timer_get_time() - started >= LIMIT_US; }
 
 static void rectangle(int x, int y, int w, int h, uint8_t value) {
+#ifdef EINK_PAINTER_PACKED
+    for (int row = y; row < y + h; ++row)
+        for (int col = x; col < x + w; ++col) {
+            const int pixel = row * WIDTH + col;
+            const int shift = 6 - 2 * (pixel % 4);
+            canvas[pixel / 4] = (canvas[pixel / 4] & ~(3u << shift)) | (value << shift);
+        }
+#else
     for (int row = y; row < y + h; ++row)
         memset(canvas + row * WIDTH + x, value, w);
+#endif
 }
 
 static void pattern(uint32_t index, uint8_t mode) {
-    memset(canvas, 0, WIDTH * HEIGHT); // 흰색=0, 검정=3. 점무늬 변환 없음.
+    memset(canvas, 0, CANVAS_BYTES); // 흰색=0, 검정=3. 점무늬 변환 없음.
 #ifdef EINK_PAINTER_GAME
     if (mode == 2) {
+#ifdef EINK_PAINTER_PACKED
+        for (int y = 0; y < 200; ++y) {
+            uint8_t *row = canvas + (70 + y * 2) * (WIDTH / 4) + 160 / 4;
+            for (int x = 0; x < 80; ++x) {
+                const uint8_t b = GAME_PACKED[index][y * 80 + x];
+                // [a,b,c,d] 네2비트 픽셀을 [a,a,b,b,c,c,d,d]로 확대한다.
+                row[x * 2] = ((b >> 6) * 0x50) | (((b >> 4) & 3) * 0x05);
+                row[x * 2 + 1] = (((b >> 2) & 3) * 0x50) | ((b & 3) * 0x05);
+            }
+            memcpy(row + WIDTH / 4, row, 640 / 4);
+        }
+#else
         for (int y = 0; y < 200; ++y) {
             uint8_t *row = canvas + (70 + y * 2) * WIDTH + 160;
             for (int x = 0; x < 320; ++x) {
@@ -95,6 +126,7 @@ static void pattern(uint32_t index, uint8_t mode) {
             }
             memcpy(row + WIDTH, row, 640);
         }
+#endif
         return;
     }
 #endif
@@ -118,7 +150,7 @@ static void run(uint8_t mode) {
     if (getCpuFrequencyMhz() != 240 || physicalPsramBytes() < 8388608) {
         fail("board_config"); return;
     }
-    canvas = (uint8_t *)heap_caps_malloc(WIDTH * HEIGHT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    canvas = (uint8_t *)heap_caps_malloc(CANVAS_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!canvas) { fail("canvas_allocation"); return; }
     const uint32_t limit = mode ? 12 : 1;
     Serial.printf("PAINTER_START mode=%s max_frames=%lu limit_us=%lu\r\n",
@@ -151,7 +183,11 @@ static void run(uint8_t mode) {
         pattern(index, mode);
         const uint32_t before = panel.paintsCompleted();
         const int64_t drawStart = esp_timer_get_time();
+#ifdef EINK_PAINTER_PACKED
+        panel.paintPacked(canvas, 1);
+#else
         panel.paint(canvas);
+#endif
         if (!panel.waitForIdle(WAIT_MS)) { fail("paint_timeout"); return; }
         const uint32_t cycles = panel.paintsCompleted() - before;
         if (!cycles || cycles > 2) { fail("drive_count"); return; }
