@@ -245,7 +245,8 @@ def exact(fields, keys):
 
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
-                deadlines=Deadlines(), stop_requested=lambda: False, first_prefix=None):
+                deadlines=Deadlines(), stop_requested=lambda: False, first_prefix=None,
+                frame_reader=None):
     """열린 직렬 fd로 한 세션만 수행한다. 테스트도 동일 함수를 PTY에서 실행한다."""
     if not 1 <= frames <= 12 or not 1 <= session <= 0xFFFFFFFF:
         raise TransferError("세션·프레임 제한 범위 오류")
@@ -372,7 +373,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
                 stop_reason = "사용자 중단 요청"
             if not stop_reason:
                 try:
-                    raw, payload, frame_info = read_frame(frame_path)
+                    raw, payload, frame_info = (frame_reader or read_frame)(frame_path)
                 except TransferError as error:
                     stop_reason = str(error)
             if stop_reason:
