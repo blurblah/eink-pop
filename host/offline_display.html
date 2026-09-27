@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>e-paper 오프라인 분석</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#10151c;color:#edf1f5;font:16px/1.6 system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:32px 24px}h1{font-size:28px;margin:8px 0}h2{font-size:19px}p{color:#bfcbd7}.tag{font-size:12px;letter-spacing:.1em;color:#70dbbf}.grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(250px,1fr);gap:22px}.card{background:#1a222d;border:1px solid #354151;border-radius:14px;padding:20px;margin:18px 0}.screen{background:#eef0e9;padding:12px;border-radius:8px}canvas{display:block;width:100%;height:auto;image-rendering:pixelated;aspect-ratio:8/5}button,select{background:#2c3949;color:white;border:1px solid #60738a;border-radius:7px;padding:9px 12px;font:inherit}button{cursor:pointer}button:disabled{opacity:.4;cursor:default}.controls{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}input[type=range]{width:100%;accent-color:#70dbbf}.metric{font-size:30px;font-weight:700;color:#70dbbf}.small{font-size:13px;color:#acbac9}table{border-collapse:collapse;width:100%;font-size:14px}td,th{text-align:left;padding:9px;border-bottom:1px solid #354151}.scroll{overflow:auto;max-height:360px}.warn{border-left:3px solid #f6c66c;padding-left:15px}.current{background:#2c4650}label{display:block;margin-bottom:7px}summary{cursor:pointer}code{color:#b9e8da}@media(max-width:760px){.grid{grid-template-columns:1fr}main{padding:20px 14px}}
+</style>
+<main>
+<div class="tag">보드 접근 없는 분석 · 실측 기록 기반</div>
+<h1>화면을 올리기 전에, 시간부터 확인</h1>
+<p>선택된 게임 화면의 화질과 갱신 간격을 비교합니다. 입자 움직임이나 잔상을 흉내 내는 시뮬레이터는 아닙니다.</p>
+<div class="grid"><section class="card"><div class="screen"><canvas id="screen" width="320" height="200" aria-label="저장된 게임 화면"></canvas></div>
+<div class="controls"><button id="play">재생</button><button id="previous">이전</button><button id="next">다음</button><button id="reset">처음</button></div>
+<label for="mode">재생 간격</label><select id="mode"><option value="measured">실측 ACK 간격</option><option value="no-pause">250ms 대기 제거 가정</option></select>
+<input id="position" type="range" min="0" step="1" value="0" aria-label="저장 화면 선택">
+<div id="frame-label" aria-live="polite"></div><div id="frame-detail" class="small"></div>
+<p class="small">첫 화면 완료를 0초로 둡니다. 최초 전체 지우기와 화면 전환 중 깜빡임은 생략합니다. 자동 반복하지 않습니다.</p></section>
+<aside><div class="card"><div>보정 표본의 갱신 간격</div><div class="metric" id="current"></div><div class="small">기준 시험 후속11장 평균 · 광학 fps 아님</div><hr><div>250ms 대기 제거 가정</div><div class="metric" id="no-pause"></div><div class="small">나머지 비용·같은 화면 순서를 유지한 가정</div></div>
+<div class="card"><h2>초당 10장 시간 예산</h2><div id="budget"></div><p class="small">목표는 100ms/장입니다. 현재 경로의 표시 처리만 비교하며 패널의 절대 성능 한계를 뜻하지 않습니다.</p></div></aside></div>
+<section class="card"><h2>변경 행 범위로 추정하기</h2><p>이전 화면을 흰색으로 복원하고 새 검정을 그리는 두 호출을 함께 사용하는 경우입니다.</p>
+<label for="rows">변화 영역 높이 — 물리 패널 행 수</label><input id="rows" type="range" min="0" max="400" value="64"><div id="estimate"></div><div id="calibration" class="small"></div></section>
+<section class="card"><h2>데이터와 구동량</h2><p>원본 320×200 · 표시 640×400 · 화면 데이터 8,000바이트/장 · FRAME 패킷 8,024바이트/장. 두 원본 비트맵은 16,000바이트이며 전체 펌웨어 메모리 사용량은 아닙니다.</p><p>변화가 있는 극성마다 15단계, 양극성은 총 30단계입니다. 변화 픽셀 수가 적어도 행 스캔과 호출 비용이 남습니다.</p></section>
+<section class="card"><h2>저장 화면별 근거</h2><div class="scroll"><table><thead><tr><th>화면</th><th>게임 번호</th><th>변화 픽셀</th><th>물리 행</th><th>처리 실측</th><th>모델 추정</th></tr></thead><tbody id="records"></tbody></table></div></section>
+<section class="card warn"><h2>예측할 수 없는 것</h2><ul id="limits"></ul><details><summary>모델 전제와 검증</summary><p id="conditions"></p><p id="validation"></p><p class="small">홀드아웃: 교대로 고른 일부 표본을 학습에서 제외한 검사입니다. 작은 단일 시험의 오차가 새 장면의 정확도를 보장하지 않습니다. 중간에 표본이 없는 행 범위는 보간 추정으로 표시합니다.</p></details></section>
+</main>
+<script>
+const report=__REPORT_DATA__;
+const $=id=>document.getElementById(id), frames=report.frames, model=report.model;
+const ms=us=>(us/1000).toFixed(1)+' ms';
+const ctx=$('screen').getContext('2d');let at=0,timer=null,playing=false;
+const images=frames.map(f=>{const data=atob(f.payload),img=ctx.createImageData(320,200);for(let i=0;i<64000;i++){const c=(data.charCodeAt(i>>3)&(128>>(i%8)))?0:255;img.data.set([c,c,c,255],i*4)}return img});
+function interval(i){return Math.max(0,frames[i].interval_us-($('mode').value==='no-pause'?model.pause_us:0))/1000}
+function show(){ctx.putImageData(images[at],0,0);$('position').value=at;let time=0;for(let i=1;i<=at;i++)time+=interval(i);$('frame-label').textContent=`저장 화면 ${at+1}/${frames.length} · 게임 번호 ${frames[at].source_sequence} · 시간축 ${(time/1000).toFixed(2)}초`;$('frame-detail').textContent=`표시 처리 실측 ${ms(frames[at].display_us)} · 전체 지우기 ${ms(frames[at].clear_us)} · 변화 ${frames[at].changed_pixels}픽셀`;$('previous').disabled=at===0;$('next').disabled=at===frames.length-1;document.querySelectorAll('#records tr').forEach((r,i)=>r.classList.toggle('current',i===at))}
+function stop(){clearTimeout(timer);timer=null;playing=false;$('play').textContent='재생'}
+function schedule(){if(at===frames.length-1){stop();return}timer=setTimeout(()=>{at++;show();schedule()},interval(at+1))}
+$('play').onclick=()=>{if(playing){stop();return}if(at===frames.length-1)at=0;playing=true;$('play').textContent='일시 정지';show();schedule()};
+$('previous').onclick=()=>{stop();at=Math.max(0,at-1);show()};$('next').onclick=()=>{stop();at=Math.min(frames.length-1,at+1);show()};$('reset').onclick=()=>{stop();at=0;show()};$('position').max=frames.length-1;$('position').oninput=()=>{stop();at=Number($('position').value);show()};$('mode').onchange=()=>{stop();show()};
+$('current').textContent=ms(report.budget.current_interval_us);$('no-pause').textContent=ms(report.budget.without_pause_us);$('budget').textContent=`표시 처리만 ${ms(report.budget.display_only_us)} — 목표 예산의 ${(report.budget.display_only_us/100000).toFixed(1)}배`;
+function estimate(){let rows=Number($('rows').value),within=rows>=model.range_rows[0]&&rows<=model.range_rows[1],seen=model.observed_bands.some(([a,b])=>rows>=a&&rows<=b);$('estimate').textContent=within?`${rows}행 → ${ms(model.intercept_us+model.per_row_us*rows)} · ${seen?'실측 범위 내 추정':'보간 추정: 해당 행 범위 미검증'}`:`${rows}행 → 예측 불가: 실측 범위 밖`}
+$('rows').oninput=estimate;$('calibration').textContent=`관측 범위: ${model.observed_bands.map(b=>b.join('~')).join(', ')}행 · 양극성 변경 ${model.samples}표본. 한 극성만 갱신하는 경우는 이 모델로 예측하지 않습니다.`;
+for(const f of frames){const row=document.createElement('tr');for(const value of [f.sequence,f.source_sequence,f.changed_pixels,f.physical_rows,ms(f.display_us),f.prediction.display_us===null?'예측 불가':ms(f.prediction.display_us)]){const cell=document.createElement('td');cell.textContent=value;row.appendChild(cell)}$('records').appendChild(row)}
+for(const note of report.limits){const li=document.createElement('li');li.textContent=note;$('limits').appendChild(li)}
+$('conditions').textContent=report.profile.conditions+' / 드라이버 '+report.profile.driver_commit.slice(0,7);$('validation').textContent=`학습 ${model.holdout.training}장 / 제외 검증 ${model.holdout.validation}장 · 평균 절대 오차 ${ms(model.holdout.mae_us)} · 최대 오차 ${ms(model.holdout.max_error_us)}. ${model.holdout.note}`;
+show();estimate();
+</script></html>

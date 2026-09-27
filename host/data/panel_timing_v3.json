@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "driver_commit": "f1607dab2df95295e6b50fc0e44c4c092a13938f",
+  "firmware_sha256": "41a8a1d0669b6b30d619bed9a439e784d90625e113e8169733e6c5116c09274a",
+  "source": "2026-09-27 실제 게임 v3 후속11장",
+  "source_resolution": [
+    320,
+    200
+  ],
+  "panel_resolution": [
+    960,
+    540
+  ],
+  "display_resolution": [
+    640,
+    400
+  ],
+  "cpu_mhz": 240,
+  "phases_per_polarity": 15,
+  "pause_us": 250000,
+  "conditions": "양극성 변경, 원본2배 확대, 동일 펌웨어·드라이버. 온도 미기록. 단일 시험 내부 표본.",
+  "samples": [
+    {
+      "rows": 30,
+      "white_us": 324569,
+      "black_us": 325334,
+      "display_us": 652502,
+      "rx_us": 16248,
+      "interval_us": 971995
+    },
+    {
+      "rows": 30,
+      "white_us": 324767,
+      "black_us": 325326,
+      "display_us": 652772,
+      "rx_us": 15943,
+      "interval_us": 980000
+    },
+    {
+      "rows": 34,
+      "white_us": 325498,
+      "black_us": 325260,
+      "display_us": 653568,
+      "rx_us": 31231,
+      "interval_us": 983000
+    },
+    {
+      "rows": 34,
+      "white_us": 324555,
+      "black_us": 325211,
+      "display_us": 652658,
+      "rx_us": 16114,
+      "interval_us": 984000
+    },
+    {
+      "rows": 100,
+      "white_us": 369699,
+      "black_us": 370234,
+      "display_us": 746545,
+      "rx_us": 21233,
+      "interval_us": 1069000
+    },
+    {
+      "rows": 30,
+      "white_us": 325502,
+      "black_us": 325387,
+      "display_us": 653432,
+      "rx_us": 30350,
+      "interval_us": 984000
+    },
+    {
+      "rows": 102,
+      "white_us": 369619,
+      "black_us": 370095,
+      "display_us": 746554,
+      "rx_us": 21237,
+      "interval_us": 1073000
+    },
+    {
+      "rows": 98,
+      "white_us": 369982,
+      "black_us": 370272,
+      "display_us": 746706,
+      "rx_us": 31108,
+      "interval_us": 1077000
+    },
+    {
+      "rows": 100,
+      "white_us": 370089,
+      "black_us": 370160,
+      "display_us": 746876,
+      "rx_us": 30983,
+      "interval_us": 1074000
+    },
+    {
+      "rows": 32,
+      "white_us": 324621,
+      "black_us": 325349,
+      "display_us": 652597,
+      "rx_us": 31225,
+      "interval_us": 984000
+    },
+    {
+      "rows": 32,
+      "white_us": 325151,
+      "black_us": 325350,
+      "display_us": 653211,
+      "rx_us": 29600,
+      "interval_us": 983000
+    }
+  ]
+}
