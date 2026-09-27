@@ -4,3 +4,6 @@
 [submodule "repos/SDLPoP"]
 	path = repos/SDLPoP
 	url = https://github.com/NagyD/SDLPoP.git
+[submodule "repos/EPD_Painter"]
+	path = repos/EPD_Painter
+	url = https://github.com/tonywestonuk/EPD_Painter.git
