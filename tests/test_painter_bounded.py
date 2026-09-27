@@ -104,7 +104,10 @@ void EPD_Painter::paint(uint8_t* pixels) {
   const bool moving=scenario=="move";
   for(int y=0;y<540;++y) for(int x=0;x<960;++x) {
     int expected=0;
-    if(moving) {
+    if(scenario=="game") {
+      if(x>=160 && x<800 && y>=70 && y<470)
+        expected=((x-160)/2+3*((y-70)/2)+paints)%4;
+    } else if(moving) {
       if(x>=200+paints*16 && x<264+paints*16 && y>=240 && y<304) expected=3;
     } else {
       if(y>=190 && y<290 && x>=200 && x<720) {
@@ -131,7 +134,7 @@ bool psramFound() { return scenario!="psram_missing"; }
 size_t esp_spiram_get_size() { assert(psramFound()); return scenario=="psram"?4194304:8388608; }
 uint32_t getCpuFrequencyMhz() { return scenario=="cpu"?160:240; }
 uint32_t millis() { return clockUs/1000; }
-void delay(uint32_t ms) { clockUs+=ms*1000; }
+void delay(uint32_t ms) { if(scenario=="game") assert(ms!=100); clockUs+=ms*1000; }
 int64_t esp_timer_get_time() { return clockUs; }
 void* heap_caps_malloc(size_t n, int) { return scenario=="alloc_fail"?nullptr:malloc(n); }
 void heap_caps_free(void* p) { ++freed; free(p); }
@@ -139,23 +142,28 @@ int main(int argc, char** argv) {
   assert(argc==2); scenario=argv[1]; setup();
   for(int i=0;i<2200;++i) loop();
   assert(begins==0 && clears==0 && paints==0 && offs==0);
+  #ifdef EINK_PAINTER_GAME
+  assert(Serial.output.find("PAINTER_READY version=3 panel=untouched")!=std::string::npos);
+#else
   assert(Serial.output.find("PAINTER_READY version=2 panel=untouched")!=std::string::npos);
+#endif
   Serial.input=scenario=="move"?"MOVE\n":"STILL\n";
   if(scenario=="partial") {
     Serial.input="STI"; loop(); assert(begins==0); Serial.input="LL\r\n";
   }
   if(scenario=="invalid") Serial.input="RUN\n";
+  if(scenario=="game" || scenario=="unsupported_game") Serial.input="GAME\n";
   if(scenario=="nul") Serial.input=std::string("STILL\0\n",7);
   if(scenario=="length") Serial.input="STILLLLL\n";
   if(scenario=="queued") Serial.input="STILL\nMOVE\n";
   loop();
-  bool config=scenario=="cpu"||scenario=="psram"||scenario=="psram_missing"||scenario=="alloc_fail"||scenario=="invalid"||scenario=="nul"||scenario=="length"||scenario=="queued";
-  bool success=scenario=="still"||scenario=="move"||scenario=="partial"||scenario=="two_cycles";
+  bool config=scenario=="cpu"||scenario=="psram"||scenario=="psram_missing"||scenario=="alloc_fail"||scenario=="invalid"||scenario=="nul"||scenario=="length"||scenario=="queued"||scenario=="unsupported_game";
+  bool success=scenario=="still"||scenario=="move"||scenario=="partial"||scenario=="two_cycles"||scenario=="game";
   assert(terminal);
   if(config) assert(begins==0 && offs==0 && paints==0);
   else assert(begins==1);
   if(success) {
-    assert(paints==(scenario=="move"?12:1)); assert(frames==(unsigned)paints);
+    assert(paints==((scenario=="move"||scenario=="game")?12:1)); assert(frames==(unsigned)paints);
     assert(Serial.output.find("PAINTER_DONE reason=limit")!=std::string::npos);
     assert(Serial.output.find("PAINTER_ERROR")==std::string::npos);
     assert(clears==1 && offs==1 && freed==1);
@@ -192,12 +200,25 @@ def main():
         (p/'esp_timer.h').write_text('#pragma once\n#include <cstdint>\nint64_t esp_timer_get_time();\n')
         (p/'esp_heap_caps.h').write_text('#pragma once\n#include <cstddef>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\nvoid* heap_caps_malloc(size_t,int);\nvoid heap_caps_free(void*);\n')
         (p/'check.cpp').write_text(HARNESS)
-        subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',tmp,
-                        f'-DSKETCH_PATH="{ROOT / "firmware/painter_bounded/painter_bounded.ino"}"',
-                        str(p/'check.cpp'),'-o',str(p/'check')],check=True)
-        for scenario in SCENARIOS:
-            subprocess.run([str(p/'check'),scenario],check=True,timeout=10)
-        print(f'실제 스케치 {len(SCENARIOS)}개 사례 통과 (픽셀 전체 비교 포함)')
+        # 게임 빌드에서는 위치·프레임별로 다른 4명도 값을 전체 픽셀에서 대조한다.
+        rows=[]
+        for frame in range(12):
+            packed=[]
+            for y in range(200):
+                for x in range(0,320,4):
+                    packed.append(sum(((x+k+3*y+frame)%4) << (6-2*k) for k in range(4)))
+            rows.append('{'+','.join(map(str,packed))+'}')
+        (p/'painter_game_frames.h').write_text('#pragma once\n#define GAME_CLIP_ID "fixture"\nstatic constexpr uint32_t GAME_FRAME_COUNT=12;\nstatic const uint8_t GAME_PACKED[12][16000]={'+','.join(rows)+'};\n')
+        cases=0
+        for game_build in (False,True):
+            subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',tmp,
+                            *(['-DEINK_PAINTER_GAME'] if game_build else []),
+                            f'-DSKETCH_PATH="{ROOT / "firmware/painter_bounded/painter_bounded.ino"}"',
+                            str(p/'check.cpp'),'-o',str(p/'check')],check=True)
+            for scenario in SCENARIOS+(['game'] if game_build else ['unsupported_game']):
+                subprocess.run([str(p/'check'),scenario],check=True,timeout=10)
+                cases+=1
+        print(f'실제 스케치 {cases}개 사례 통과 (기본/게임 빌드, 확대 픽셀 전체 비교 포함)')
 
 if __name__=='__main__':
     main()
