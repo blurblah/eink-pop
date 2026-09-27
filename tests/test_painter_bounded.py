@@ -47,6 +47,7 @@ public:
   void setQuality(Quality);
   void setPaintProfile(bool) {}
   bool begin();
+  bool setDirectTransitions(bool);
   void clearBuffers();
   void clear();
   bool waitForIdle(uint32_t);
@@ -67,7 +68,7 @@ static std::string scenario;
 static int64_t clockUs=0;
 static int begins=0, clears=0, paints=0, offs=0, freed=0, completed=0;
 static bool autoOff=true, fast=false, buffers=false, busy=false;
-static int idleSeconds=0;
+static int idleSeconds=0, directCalls=0;
 MockSerial Serial;
 MockEsp ESP;
 #include SKETCH_PATH
@@ -80,7 +81,18 @@ bool EPD_Painter::begin() {
   if(scenario=="slow_begin") clockUs+=31000000;
   return scenario!="begin_fail";
 }
-void EPD_Painter::clearBuffers() { buffers=true; }
+bool EPD_Painter::setDirectTransitions(bool on) {
+  assert(on && begins==1 && initialized && !buffers && !clears && !paints);
+  ++directCalls; return scenario!="direct_fail";
+}
+void EPD_Painter::clearBuffers() {
+#ifdef EINK_PAINTER_DIRECT
+  assert(directCalls==1);
+#else
+  assert(directCalls==0);
+#endif
+  buffers=true;
+}
 void EPD_Painter::clear() {
   assert(buffers); ++clears; busy=true;
   if(scenario=="host_stop") Serial.input="STOP\n";
@@ -142,7 +154,9 @@ int main(int argc, char** argv) {
   assert(argc==2); scenario=argv[1]; setup();
   for(int i=0;i<2200;++i) loop();
   assert(begins==0 && clears==0 && paints==0 && offs==0);
-  #ifdef EINK_PAINTER_GAME
+  #ifdef EINK_PAINTER_DIRECT
+  assert(Serial.output.find("PAINTER_READY version=4 panel=untouched")!=std::string::npos);
+#elif defined(EINK_PAINTER_GAME)
   assert(Serial.output.find("PAINTER_READY version=3 panel=untouched")!=std::string::npos);
 #else
   assert(Serial.output.find("PAINTER_READY version=2 panel=untouched")!=std::string::npos);
@@ -176,7 +190,8 @@ int main(int argc, char** argv) {
       assert(Serial.output.find("PAINTER_DONE")==std::string::npos);
     else assert(offs==1 && freed==1 && Serial.output.find("PAINTER_DONE reason=error")!=std::string::npos);
   }
-  if(scenario=="slow_begin"||scenario=="clear_timeout") assert(paints==0);
+  if(scenario=="slow_begin"||scenario=="clear_timeout"||scenario=="direct_fail") assert(paints==0);
+  if(scenario=="direct_fail") assert(clears==0 && directCalls==1);
   if(scenario=="slow_paint") assert(paints==1 && Serial.output.find("reason=time_limit")!=std::string::npos);
   int before=paints; std::string output=Serial.output; Serial.input="MOVE\n";
   for(int i=0;i<1000;++i) loop();
@@ -210,15 +225,16 @@ def main():
             rows.append('{'+','.join(map(str,packed))+'}')
         (p/'painter_game_frames.h').write_text('#pragma once\n#define GAME_CLIP_ID "fixture"\nstatic constexpr uint32_t GAME_FRAME_COUNT=12;\nstatic const uint8_t GAME_PACKED[12][16000]={'+','.join(rows)+'};\n')
         cases=0
-        for game_build in (False,True):
+        for game_build in (False,True,"direct"):
             subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',tmp,
                             *(['-DEINK_PAINTER_GAME'] if game_build else []),
+                            *(['-DEINK_PAINTER_DIRECT'] if game_build=='direct' else []),
                             f'-DSKETCH_PATH="{ROOT / "firmware/painter_bounded/painter_bounded.ino"}"',
                             str(p/'check.cpp'),'-o',str(p/'check')],check=True)
-            for scenario in SCENARIOS+(['game'] if game_build else ['unsupported_game']):
+            for scenario in SCENARIOS+(['game'] if game_build else ['unsupported_game'])+(['direct_fail'] if game_build=='direct' else []):
                 subprocess.run([str(p/'check'),scenario],check=True,timeout=10)
                 cases+=1
-        print(f'실제 스케치 {cases}개 사례 통과 (기본/게임 빌드, 확대 픽셀 전체 비교 포함)')
+        print(f'실제 스케치 {cases}개 사례 통과 (기본/게임/direct 빌드, 확대 픽셀 전체 비교 포함)')
 
 if __name__=='__main__':
     main()

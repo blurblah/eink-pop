@@ -4,6 +4,9 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <esp32s3/spiram.h>
+#if defined(EINK_PAINTER_DIRECT) && !defined(EINK_PAINTER_GAME)
+#error "직접 전이 비교는 동일 GAME 입력 빌드에서만 활성화합니다."
+#endif
 #ifdef EINK_PAINTER_GAME
 #include <painter_game_frames.h>
 static_assert(GAME_FRAME_COUNT == 12 && sizeof(GAME_PACKED) == 12 * 16000,
@@ -34,7 +37,11 @@ static uint32_t physicalPsramBytes() {
 
 static void ready() {
 #ifdef EINK_PAINTER_GAME
+#ifdef EINK_PAINTER_DIRECT
+    Serial.printf("PAINTER_READY version=4 panel=untouched driver=7544e2d board=H716 quality=FAST gray=4 nvs=0 direct=1 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
+#else
     Serial.printf("PAINTER_READY version=3 panel=untouched driver=7544e2d board=H716 quality=FAST gray=4 nvs=0 clip=%s cpu_mhz=%lu psram_bytes=%lu psram_heap_bytes=%lu\r\n",
+#endif
                   GAME_CLIP_ID, (unsigned long)getCpuFrequencyMhz(),
                   (unsigned long)physicalPsramBytes(), (unsigned long)ESP.getPsramSize());
 #else
@@ -118,6 +125,9 @@ static void run(uint8_t mode) {
     panel.setPaintProfile(true);
     if (!panel.begin()) { fail("begin_failed"); return; }
     initialized = true;
+#ifdef EINK_PAINTER_DIRECT
+    if (!panel.setDirectTransitions(true)) { fail("direct_init"); return; }
+#endif
     panel.clearBuffers(); // 초기화되지 않은 화면 상태를 사용하지 않는다.
     if (expired()) { fail("time_limit"); return; }
     const int64_t clearStart = esp_timer_get_time();
