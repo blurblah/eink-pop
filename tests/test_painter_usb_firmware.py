@@ -103,6 +103,14 @@ int main(int argc,char**argv){
  assert(argc==3);scenario=argv[1];std::string dir=argv[2];setup();
  assert(begins==0&&clears==0&&paints==0);
  const uint8_t known[]="123456789";assert((updateCrc(0xffffffff,known,9)^0xffffffff)==0xcbf43926);
+ // 전 바이트 값·임의 초기 상태·모든 분할점에서 독립 비트 구현과 비교.
+ uint8_t data[256];for(int i=0;i<256;++i)data[i]=i;
+ for(uint32_t seed: {0U,1U,0xffffffffU,0x12345678U}) {
+   uint32_t ref=seed;
+   for(uint8_t b:data){ref^=b;for(int k=0;k<8;++k)ref=(ref>>1)^((ref&1)?0xedb88320U:0U);}
+   assert(updateCrc(seed,data,256)==ref);
+   for(int n=0;n<=256;++n)assert(updateCrc(updateCrc(seed,data,n),data+n,256-n)==ref);
+ }
  auto start=file(dir+"/start.bin");auto first=file(dir+"/first.bin");auto second=file(dir+"/second.bin");
  if(scenario=="start_crc")start.back()^=1;
  if(scenario=="old_version"){start[4]=3;crc(start);}

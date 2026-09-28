@@ -1,5 +1,6 @@
 """기존 직렬 I/O 위의 v4 상태·CRC·최신 읽기·종료 계약 검증."""
 import json
+import hashlib
 from pathlib import Path
 import struct
 import sys
@@ -59,6 +60,23 @@ class Peer:
         return dict(bytes=len(wire),bytes_written=len(wire),send_started_monotonic=time.monotonic())
 
 class Tests(unittest.TestCase):
+    def test_captured_replay_integrity_and_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            directory=Path(d); entries=[]
+            for i in range(1,4):
+                raw=f'P6\n# eink sequence {i}\n320 200\n255\n'.encode()+bytes([i*60])*192000
+                name=f'frame-{i:04d}.ppm'; (directory/name).write_bytes(raw)
+                entries.append(dict(file=name,source_sequence=i,captured_seconds=i/12,
+                                    bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest(),skipped_before=0))
+            (directory/'capture.json').write_text(json.dumps(dict(schema=1,status='완료',frames=entries)))
+            reader=p.capture_reader(directory,2,2)
+            self.assertEqual([reader(None)[2]['source_sequence'] for _ in range(2)],[2,3])
+            with self.assertRaises(p.TransferError):reader(None)
+            with self.assertRaises(p.TransferError):p.capture_reader(directory,2,3)
+            reader=p.capture_reader(directory,2,2)
+            file=directory/'frame-0002.ppm'; file.write_bytes(file.read_bytes().replace(bytes([120])*3,bytes([119])*3,1))
+            with self.assertRaises(p.TransferError):reader(None)
+
     def run_peer(self,fault='',stop=False,same=False):
         peer=Peer(fault);meta={};reads=[]
         def reader(_):

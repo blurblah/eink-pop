@@ -37,11 +37,16 @@ static uint32_t readLe32(const uint8_t *bytes)
 static uint32_t updateCrc(uint32_t crc, const uint8_t *bytes, size_t count)
 {
     // IEEE CRC-32: 초기 FFFFFFFF, reflected polynomial, 최종 XOR FFFFFFFF.
+    static constexpr uint32_t nibble[16] = {
+        0x00000000U, 0x1DB71064U, 0x3B6E20C8U, 0x26D930ACU,
+        0x76DC4190U, 0x6B6B51F4U, 0x4DB26158U, 0x5005713CU,
+        0xEDB88320U, 0xF00F9344U, 0xD6D6A3E8U, 0xCB61B38CU,
+        0x9B64C2B0U, 0x86D3D2D4U, 0xA00AE278U, 0xBDBDF21CU
+    };
     for (size_t i = 0; i < count; ++i) {
         crc ^= bytes[i];
-        for (uint8_t bit = 0; bit < 8; ++bit) {
-            crc = (crc >> 1) ^ ((crc & 1U) ? 0xEDB88320U : 0U);
-        }
+        crc = (crc >> 4) ^ nibble[crc & 15U];
+        crc = (crc >> 4) ^ nibble[crc & 15U];
     }
     return crc;
 }
@@ -148,6 +153,8 @@ static void beginSession(uint32_t id)
     canvas = (uint8_t *)heap_caps_malloc(CANVAS_BYTES, caps);
     if (!previous || !incoming || !canvas) { fail("allocation_failed"); return; }
     memset(previous, 0, SOURCE_BYTES);
+    // 여백은 부팅당 한 번만 초기화한다. paintPacked는 이 입력을 복사한다.
+    memset(canvas, 0, CANVAS_BYTES);
     if (Serial.available() != 0) { fail("early_data"); return; }
     Serial.printf("PAINTER_USB_RX session=%lu\r\n", (unsigned long)session);
     receiveWindow = esp_timer_get_time();
@@ -155,15 +162,16 @@ static void beginSession(uint32_t id)
 
 static void expandFrame()
 {
-    memset(canvas, 0, CANVAS_BYTES);
+    uint8_t expanded[160];
     for (int y = 0; y < 200; ++y) {
         uint8_t *row = canvas + (70 + y * 2) * 240 + 40;
         for (int x = 0; x < 80; ++x) {
             const uint8_t b = incoming[y * 80 + x];
-            row[x * 2] = ((b >> 6) * 0x50) | (((b >> 4) & 3) * 0x05);
-            row[x * 2 + 1] = (((b >> 2) & 3) * 0x50) | ((b & 3) * 0x05);
+            expanded[x * 2] = ((b >> 6) * 0x50) | (((b >> 4) & 3) * 0x05);
+            expanded[x * 2 + 1] = (((b >> 2) & 3) * 0x50) | ((b & 3) * 0x05);
         }
-        memcpy(row + 240, row, 160);
+        memcpy(row, expanded, sizeof(expanded));
+        memcpy(row + 240, expanded, sizeof(expanded));
     }
 }
 

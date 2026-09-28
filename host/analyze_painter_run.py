@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Painter 로그와 실제 전송 바이트를 대조하고 수치 목표를 판정한다."""
+import argparse
+import hashlib
+import json
+import math
+from pathlib import Path
+import statistics
+import struct
+
+from painter_usb import HEADER, START, FRAME, packet
+
+
+def require(condition, message):
+    if not condition: raise ValueError(message)
+
+
+def distribution(values):
+    require(bool(values) and all(math.isfinite(v) and v >= 0 for v in values), '시간 표본 오류')
+    return dict(count=len(values),mean=statistics.mean(values),
+                p95=sorted(values)[math.ceil(len(values)*.95)-1],maximum=max(values))
+
+
+def analyze(prefix):
+    observation=json.loads(Path(str(prefix)+'-observation.json').read_text())
+    wire=Path(str(prefix)+'-tx.bin').read_bytes()
+    frames=observation['frames'];done=observation['done']
+    require(observation['status']=='통과' and observation['serial_closed'] and
+            observation['after_done_seconds']>=10 and done['reason']=='limit' and
+            done['poweroff_returned']=='1' and int(done['frames'])==len(frames) and
+            2<=len(frames)<=12, '정상 제한 종료/관측 표본 오류')
+    offset=0; packets=[]
+    while offset<len(wire):
+        require(offset+24<=len(wire),'잘린 헤더')
+        magic,version,kind,flags,session,seq,size=HEADER.unpack(wire[offset:offset+20])
+        require(size<=16000 and offset+size+24<=len(wire),'잘린 본문')
+        blob=wire[offset:offset+size+24];payload=blob[20:-4]
+        require(blob==packet(kind,session,seq,payload) and session==observation['session'],'패킷/CRC/세션 오류')
+        packets.append((kind,seq,payload,struct.unpack('<I',blob[-4:])[0]))
+        offset+=len(blob)
+    require(len(packets)==len(frames)+1 and packets[0][:2]==(START,0) and
+            packets[0][2]==bytes([len(frames)]),'START/패킷 수 오류')
+    previous=bytes(16000);changed=[];applied=0;last_source=0
+    for i,(f,p) in enumerate(zip(frames,packets[1:])):
+        kind,seq,payload,crc=p;ack=f['ack'];change=payload!=previous
+        require(kind==FRAME and seq==i+1==f['sequence']==int(ack['seq']) and
+                int(ack['session'])==observation['session'] and
+                ack['crc']==f'{crc:08x}' and hashlib.sha256(payload).hexdigest()==f['bitmap_sha256'],
+                'FRAME/ACK/본문 해시 불일치')
+        require(int(ack['cycles'])==int(change) and
+                ack['result']==('applied' if i==0 or change else 'unchanged'),'변경과 실제 구동 불일치')
+        require((int(ack['clear_us'])>0 if i==0 else int(ack['clear_us'])==0),'정리 횟수 오류')
+        require(f['source_sequence']>last_source,'원본 순서 오류')
+        changed.append(change);applied+=ack['result']=='applied'
+        previous=payload;last_source=f['source_sequence']
+    require(applied==int(done['applied']),'적용 수 오류')
+    acks=[f['ack']['received_monotonic'] for f in frames]
+    gaps=[(b-a)*1000 for a,b in zip(acks,acks[1:])]
+    require(all(g>0 for g in gaps),'ACK 시간 순서 오류')
+    gap=distribution(gaps)
+    times={key:distribution([int(f['ack'][key])/1000 for f in frames[1:]])
+           for key in ('rx_us','prepare_us','paint_us','display_us')}
+    return dict(input_mode=observation.get('input_mode','latest_file'),frames=len(frames),
+                source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),
+                first_display_ms=int(frames[0]['ack']['display_us'])/1000,
+                ack_interval_ms=gap,software_completion_hz=1000/gap['mean'],
+                subsequent_ms=times,all_frames_changed=all(changed),
+                verified_packet_crc=True,quiet_seconds=observation['after_done_seconds'],
+                meets_single_run_timing=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125,
+                limitation='단일 제한 실행. 캡처 재생은 실시간 목표 달성이 아니며 ACK는 광학fps·입력 지연이 아니다.')
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--log-prefix',type=Path,required=True)
+    parser.add_argument('--output',type=Path,required=True)
+    args=parser.parse_args()
+    report=analyze(args.log_prefix)
+    with args.output.open('x') as f:json.dump(report,f,ensure_ascii=False,indent=2);f.write('\n')
+    print(json.dumps(report,ensure_ascii=False,indent=2))
+
+
+if __name__=='__main__': main()

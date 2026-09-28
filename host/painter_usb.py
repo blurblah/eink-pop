@@ -14,6 +14,7 @@ import time
 import zlib
 
 from prepare_painter_clip import convert, unpack
+from compare_captures import load_capture
 from usb_frame import (HEADER, START, FRAME, STOP, SerialIO, TransferError,
                        ResponseTimeout, open_serial, fields_of, unsigned, exact, stamp)
 
@@ -51,6 +52,26 @@ def read_frame(path):
         ppm_sha256=hashlib.sha256(raw).hexdigest(), bitmap_sha256=hashlib.sha256(payload).hexdigest(),
         conversion='corrected_gray_nearest4_no_dither', bpp=2, payload_bytes=16000,
         white=0, black=3, pixel_order='msb_first')
+
+
+def capture_reader(directory, start, count):
+    """고정 입력 비교용. 검증된 캡처의 연속 번호를 ACK마다 한 장씩 읽는다."""
+    frames = load_capture(directory)
+    manifest = json.loads((Path(directory)/'capture.json').read_text())
+    selected = [(f,entry) for f,entry in zip(frames,manifest['frames'])
+                if start <= f['source_sequence'] < start+count]
+    if [f['source_sequence'] for f,_ in selected] != list(range(start,start+count)):
+        raise TransferError('재생 입력은 누락 없는 연속 원본 번호가 필요합니다')
+    source = iter(selected)
+    def read(_):
+        try: expected,entry = next(source)
+        except StopIteration as error: raise TransferError('재생 입력 소진') from error
+        raw,payload,info = read_frame(Path(directory)/entry['file'])
+        if info['source_sequence'] != expected['source_sequence'] or info['ppm_sha256'] != entry['sha256']:
+            raise TransferError('재생 입력이 사전 검증 후 변경됨')
+        info['captured_seconds'] = expected['seconds']
+        return raw,payload,info
+    return read
 
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
@@ -198,7 +219,10 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--frame-path',type=Path,required=True)
+    source=parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--frame-path',type=Path)
+    source.add_argument('--replay-capture',type=Path,help='동일 입력 성능 비교용 캡처 디렉터리')
+    parser.add_argument('--start-sequence',type=int,default=40)
     parser.add_argument('--port',required=True,help='실행 전 동일 장치로 확인한 포트')
     parser.add_argument('--frames',type=int,default=12)
     parser.add_argument('--log-prefix',type=Path,required=True)
@@ -208,19 +232,20 @@ def main(argv=None):
            [('raw','-runtime.log'),('tx','-tx.bin'),('json','-observation.json'),('ppm','-first.ppm'),('pgm','-first.pgm')]}
     if any(p.exists() for p in paths.values()): parser.error('기존 로그·이미지를 덮어쓰거나 반복 실행하지 않습니다')
     args.log_prefix.parent.mkdir(parents=True,exist_ok=True)
-    metadata={};fd=None;stop=False
+    metadata={'input_mode':'captured_replay' if args.replay_capture else 'latest_file'};fd=None;stop=False
     def request_stop(*_):
         nonlocal stop
         stop=True
     previous_handler=signal.signal(signal.SIGINT,request_stop)
     try:
+        reader=capture_reader(args.replay_capture,args.start_sequence,args.frames) if args.replay_capture else read_frame
         with paths['raw'].open('xb') as raw,paths['tx'].open('xb') as tx:
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,
-                        stop_requested=lambda:stop,first_prefix=args.log_prefix)
+                        stop_requested=lambda:stop,frame_reader=reader,first_prefix=args.log_prefix)
         print('제한 전송 종료: '+metadata['status'])
         return 0
-    except (OSError,TransferError) as error:
+    except (OSError,ValueError,TransferError) as error:
         metadata.update(status='오류',error=str(error),finished_at=stamp())
         print('전송 중단: '+str(error),file=sys.stderr)
         return 1
