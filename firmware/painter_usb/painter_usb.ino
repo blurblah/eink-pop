@@ -11,6 +11,9 @@
 #ifndef EPD_PAINTER_NO_NVS
 #error "모든 C++ 단위에 EPD_PAINTER_NO_NVS를 지정하세요."
 #endif
+#if defined(PAINTER_USB_DIAGNOSTICS) && !defined(EPD_PAINTER_CAPTURE_TIMING)
+#error "진단 앱은 드라이버 시간 캡처 빌드가 필요합니다."
+#endif
 static constexpr size_t SOURCE_BYTES = 16000, CANVAS_BYTES = 129600;
 static constexpr int64_t RX_LIMIT_US = 5000000, SCREEN_LIMIT_US = 30000000;
 static constexpr uint32_t WAIT_MS = 5000;
@@ -84,7 +87,13 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=7040c6b board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1");
+    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=32184e6 board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1"
+#ifdef PAINTER_USB_DIAGNOSTICS
+                   " timing=1"
+#else
+                   " timing=0"
+#endif
+    );
     lastReadyMs = millis();
 }
 
@@ -186,6 +195,9 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
     const bool changed = memcmp(previous, incoming, SOURCE_BYTES) != 0;
     int64_t clearUs = 0, prepareUs = 0, paintUs = 0;
     uint32_t cycles = 0;
+#ifdef PAINTER_USB_DIAGNOSTICS
+    EPD_Painter::PaintTiming timing;
+#endif
     if (firstFrame) {
         screenStart = esp_timer_get_time();
         panel.setAutoShutdown(false);
@@ -214,6 +226,9 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
         paintUs = esp_timer_get_time() - painted;
         cycles = panel.paintsCompleted() - before;
         if (cycles != 1) { fail("drive_count"); return; }
+#ifdef PAINTER_USB_DIAGNOSTICS
+        if (!panel.readPaintTiming(timing) || timing.cycle != before + 1) { fail("timing"); return; }
+#endif
     }
     if (firstFrame || changed) ++applied;
     uint8_t *old = previous; previous = incoming; incoming = old;
@@ -224,6 +239,12 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
         if (esp_timer_get_time() - ackWait >= 100000) { fail("ack_connection"); return; }
         delay(1);
     }
+#ifdef PAINTER_USB_DIAGNOSTICS
+    if (changed) Serial.printf("PAINTER_USB_TIMING session=%lu seq=%lu cycle=%lu passes=%lu discovery_us=%lld rowloop_us=%lld settle_us=%lld neutral_us=%lld total_us=%lld\r\n",
+            (unsigned long)session, (unsigned long)sequence, (unsigned long)timing.cycle,
+            (unsigned long)timing.passes, (long long)timing.discovery_us, (long long)timing.rowloop_us,
+            (long long)timing.settle_us, (long long)timing.neutral_us, (long long)timing.total_us);
+#endif
     Serial.printf("PAINTER_USB_ACK session=%lu seq=%lu crc=%08lx result=%s rx_us=%lld decode_us=%lld display_us=%lld clear_us=%lld prepare_us=%lld paint_us=%lld cycles=%lu elapsed_us=%lld\r\n",
                   (unsigned long)session, (unsigned long)sequence, (unsigned long)packetCrc,
                   firstFrame || changed ? "applied" : "unchanged", (long long)rxUs, (long long)decodeUs,

@@ -49,6 +49,17 @@ class Tests(unittest.TestCase):
                 prefix,_=self.fixture(d,step=.09,version=version,patch=patch)
                 result=a.analyze(prefix);self.assertTrue(result['meets_single_run_timing'])
                 if patch:self.assertLess(result['wire_bytes'],17000)
+    def test_driver_timing_validation(self):
+        with tempfile.TemporaryDirectory() as d:
+            prefix,obs=self.fixture(d,step=.09,patch=True)
+            obs['timing_diagnostics']=True
+            for f in obs['frames']:
+                f['driver_timing']=dict(seq=f['sequence'],cycle=f['sequence'],passes=19,
+                    discovery_us=1000,rowloop_us=1000,settle_us=76000,neutral_us=1000,total_us=79000)
+            path=Path(str(prefix)+'-observation.json');path.write_text(json.dumps(obs))
+            r=a.analyze(prefix);self.assertEqual(r['driver_timing']['passes'],[19]*11)
+            obs['frames'][1]['driver_timing']['total_us']=81000;path.write_text(json.dumps(obs))
+            with self.assertRaises(ValueError):a.analyze(prefix)
     def test_corrupt_packet_and_early_done(self):
         for fault in ('crc','truncated','sequence','no_off','quiet','cycle','backward','nan'):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as d:

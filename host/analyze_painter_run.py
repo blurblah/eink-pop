@@ -66,11 +66,28 @@ def analyze(prefix):
            for key in ('rx_us','prepare_us','paint_us','display_us')}
     if protocol==5:
         times['decode_us']=distribution([int(f['ack']['decode_us'])/1000 for f in frames[1:]])
+    driver={}
+    if observation.get('timing_diagnostics'):
+        captured=[];last_cycle=0
+        for f,change in zip(frames,changed):
+            if not change:
+                require('driver_timing' not in f,'무구동 진단')
+                continue
+            t=f['driver_timing']
+            require(t['seq']==f['sequence'] and t['cycle']>last_cycle and 1<=t['passes']<=26 and
+                    sum(t[k] for k in ('discovery_us','rowloop_us','settle_us','neutral_us'))<=t['total_us']<=int(f['ack']['paint_us']),
+                    '내부 시간/주사 진단 오류')
+            last_cycle=t['cycle']
+            if f is not frames[0]:captured.append(t)
+        if captured:
+            driver=dict(passes=[t['passes'] for t in captured],
+                        subsequent_ms={k:distribution([t[k]/1000 for t in captured]) for k in
+                                       ('discovery_us','rowloop_us','settle_us','neutral_us','total_us')})
     return dict(input_mode=observation.get('input_mode','latest_file'),frames=len(frames),
                 source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),
                 first_display_ms=int(frames[0]['ack']['display_us'])/1000,
                 ack_interval_ms=gap,software_completion_hz=1000/gap['mean'],
-                subsequent_ms=times,all_frames_changed=all(changed),
+                subsequent_ms=times,driver_timing=driver,all_frames_changed=all(changed),
                 verified_packet_crc=True,quiet_seconds=observation['after_done_seconds'],
                 meets_single_run_timing=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125,
                 limitation='단일 제한 실행. 캡처 재생은 실시간 목표 달성이 아니며 ACK는 광학fps·입력 지연이 아니다.')

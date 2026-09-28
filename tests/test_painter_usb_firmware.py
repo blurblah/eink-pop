@@ -42,6 +42,8 @@ public:
  bool begin(); bool setDirectTransitions(bool); void clearBuffers(); void clear();
  bool waitForIdle(uint32_t); bool powerOffWhenIdle(uint32_t); uint32_t paintsCompleted();
  void paintPacked(const uint8_t*,int);
+ struct PaintTiming { uint32_t cycle=0,passes=0; int64_t discovery_us=0,rowloop_us=0,settle_us=0,neutral_us=0,total_us=0; };
+ bool readPaintTiming(PaintTiming&);
 };
 '''
 HARNESS=r'''
@@ -88,6 +90,11 @@ void EPD_Painter::clear(){assert(buffers);++clears;busy=true;clockUs+=100000;}
 bool EPD_Painter::waitForIdle(uint32_t ms){assert(ms==5000);if(scenario=="clear_timeout"&&!paints)return false;if(scenario=="paint_timeout"&&paints)return false;busy=false;clockUs+=1000;if(paints)completed+=scenario=="cycles"?2:1;return true;}
 bool EPD_Painter::powerOffWhenIdle(uint32_t ms){assert(ms==5000);++offs;if(scenario=="off")return false;busy=false;return true;}
 uint32_t EPD_Painter::paintsCompleted(){return completed;}
+bool EPD_Painter::readPaintTiming(PaintTiming&t){
+ assert(!busy);if(scenario=="timing_missing")return false;
+ t.cycle=completed+(scenario=="timing_cycle");t.passes=19;t.discovery_us=10;
+ t.rowloop_us=100000;t.settle_us=76000;t.neutral_us=1000;t.total_us=177020;return true;
+}
 void EPD_Painter::paintPacked(const uint8_t*p,int repeat){
  assert(!busy&&clears==1&&offs==0&&repeat==1&&expected.size()==16000);
  for(int y=0;y<540;++y)for(int x=0;x<960;++x){
@@ -201,8 +208,13 @@ def main():
             if name=='patch_crc':wire=wire[:-1]+bytes([wire[-1]^1])
             (p/(name+'.bin')).write_bytes(wire)
             (p/(name+'.expected')).write_bytes(target if name=='patch' else a)
-        subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',d,
-                        f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
-        for case in cases:subprocess.run([str(p/'check'),case,d],check=True,timeout=10)
-        print(f'실제 USB 스케치 {len(cases)}사례 통과')
+        total=0
+        for diagnostics in (False,True):
+            flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING'] if diagnostics else []
+            subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',d,*flags,
+                            f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
+            selected=cases+(['timing_missing','timing_cycle'] if diagnostics else [])
+            for case in selected:subprocess.run([str(p/'check'),case,d],check=True,timeout=10,stdout=subprocess.DEVNULL)
+            total+=len(selected)
+        print(f'실제 USB 스케치 일반/진단 {total}사례 통과')
 if __name__=='__main__':main()

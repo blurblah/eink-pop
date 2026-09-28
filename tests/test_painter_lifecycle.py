@@ -40,6 +40,10 @@ public:
   void powerOff() { assert(paintStage == 0); assert(!LCD_CAM.lcd_user.lcd_start); ++off; }
   bool waitForIdle(uint32_t);
   bool powerOffWhenIdle(uint32_t);
+  struct PaintTiming { uint32_t cycle=0,passes=0; int64_t discovery_us=0,rowloop_us=0,settle_us=0,neutral_us=0,total_us=0; };
+  PaintTiming _last_paint_timing{};
+  std::atomic<uint32_t> _paints_done{0};
+  bool readPaintTiming(PaintTiming&);
   class PanelPowerGuard {
   public:
     static inline Sem* power_mtx = &power;
@@ -93,14 +97,25 @@ int main() {
   // 잠금을 얻는 사이 상태가바뀌면완료로오인하지않는다.
   reset(); acquired=[&] { d.paintStage=2; };
   assert(!d.waitForIdle(2)); assert(now==2000 && active.available);
-  puts("라이프사이클 12개 경계 사례 통과");
+  reset(); d.paintStage=0; EPD_Painter::PaintTiming t; t.cycle=99;
+  assert(!d.readPaintTiming(t)&&t.cycle==99); // 비활성/아직 기록 없음
+  d._last_paint_timing.cycle=7; d._last_paint_timing.passes=19;d._paints_done=7;
+  assert(d.readPaintTiming(t)&&t.cycle==7&&t.passes==19&&active.available);
+  d.paintStage=1;assert(!d.readPaintTiming(t));d.paintStage=0;
+  active.available=false;assert(!d.readPaintTiming(t));active.available=true;
+  LCD_CAM.lcd_user.lcd_start=true;assert(!d.readPaintTiming(t)&&active.available);LCD_CAM.lcd_user.lcd_start=false;
+  d._paints_done=8;assert(!d.readPaintTiming(t));d._paints_done=7;
+  acquired=[&]{d.paintStage=2;};assert(!d.readPaintTiming(t)&&active.available);acquired=nullptr;d.paintStage=0;
+  d._paint_task_h=nullptr;assert(!d.readPaintTiming(t));d._paint_task_h=&d;
+  d._paint_active_sem=nullptr;assert(!d.readPaintTiming(t));d._paint_active_sem=&active;
+  puts("라이프사이클 12개 및 완료 시간 조회 9개 경계 사례 통과");
 }
 '''
 
 def main():
     source=CPP.read_text();header=HDR.read_text()
     body=definition(header,'powerOffNow').replace('static bool powerOffNow','bool EPD_Painter::PanelPowerGuard::powerOffNow',1)
-    code=PREFIX+'\n'+body+'\n'+definition(source,'waitForIdle')+'\n'+definition(source,'powerOffWhenIdle')+'\n'+MAIN
+    code=PREFIX+'\n'+body+'\n'+definition(source,'waitForIdle')+'\n'+definition(source,'powerOffWhenIdle')+'\n'+definition(source,'readPaintTiming')+'\n'+MAIN
     with tempfile.TemporaryDirectory(prefix='eink-painter-life-') as tmp:
         p=Path(tmp);(p/'check.cpp').write_text(code)
         subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g',str(p/'check.cpp'),'-o',str(p/'check')],check=True)

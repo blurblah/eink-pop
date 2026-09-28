@@ -14,10 +14,12 @@ import painter_usb as p
 from painter_patch import decode as decode_patch
 
 class Peer:
-    def __init__(self, fault='', stop=False):
+    def __init__(self, fault='', stop=False, diagnostics=False):
         self.fault=fault; self.pending=bytearray(); self.queue=[]; self.sent=[]
+        self.diagnostics=diagnostics
         self.acks=0;self.n=0;self.applied=0;self.total=2;self.previous=bytes(16000)
         ready=p.READY.copy()
+        ready['timing']=str(int(diagnostics))
         if fault=='ready':ready['version']='3'
         self.emit('READY',ready)
     def emit(self,marker,v):self.queue.append('PAINTER_USB_'+marker+' '+' '.join(f'{k}={x}' for k,x in v.items()))
@@ -56,6 +58,13 @@ class Peer:
             if self.fault=='result':v['result']='unchanged'
             if self.fault=='reboot':self.queue.append('ESP-ROM: reboot')
             if self.fault=='error':self.emit('ERROR',dict(reason='paint_timeout'))
+            if self.diagnostics and changed and self.fault!='timing_missing':
+                t=dict(session=session,seq=seq,cycle=self.applied,passes=19,discovery_us=10,
+                       rowloop_us=40,settle_us=30,neutral_us=10,total_us=100)
+                if self.fault=='timing_seq':t['seq']=99
+                if self.fault=='timing_sum':t['total_us']=1
+                if self.fault=='timing_over':t['total_us']=300
+                self.emit('TIMING',t)
             self.emit('ACK',v)
             if self.n==self.total:
                 self.emit('DONE',dict(session=session,reason='limit',frames=self.n+(self.fault=='done_count'),applied=self.applied,poweroff_returned=0 if self.fault=='off' else 1))
@@ -80,8 +89,8 @@ class Tests(unittest.TestCase):
             file=directory/'frame-0002.ppm'; file.write_bytes(file.read_bytes().replace(bytes([120])*3,bytes([119])*3,1))
             with self.assertRaises(p.TransferError):reader(None)
 
-    def run_peer(self,fault='',stop=False,same=False):
-        peer=Peer(fault);meta={};reads=[]
+    def run_peer(self,fault='',stop=False,same=False,diagnostics=False):
+        peer=Peer(fault,diagnostics=diagnostics);meta={};reads=[]
         def reader(_):
             self.assertEqual(len(reads),peer.acks) # 완료 응답을 소비한 뒤에만 최신 파일 읽기
             seq=(4,9)[len(reads)];reads.append(seq)
@@ -89,11 +98,19 @@ class Tests(unittest.TestCase):
             return b'raw',data,dict(source_sequence=seq)
         with patch.object(p,'SerialIO',return_value=peer):
             result=p.run_session(-1,'unused',2,123,meta,frame_reader=reader,after_done=0,
-                                 stop_requested=(lambda:bool(peer.sent)) if stop else (lambda:False))
+                                 stop_requested=(lambda:bool(peer.sent)) if stop else (lambda:False),
+                                 timing_diagnostics=diagnostics)
         return result,peer,reads
     def test_latest_after_ack(self):
         r,peer,reads=self.run_peer();self.assertEqual(reads,[4,9]);self.assertEqual(r['status'],'통과')
         self.assertEqual(len(peer.sent),3);self.assertEqual(r['done']['frames'],'2')
+    def test_completed_driver_timing(self):
+        r,_,_=self.run_peer(diagnostics=True)
+        self.assertEqual([f['driver_timing']['cycle'] for f in r['frames']],[1,2])
+        r,_,_=self.run_peer(same=True,diagnostics=True)
+        self.assertNotIn('driver_timing',r['frames'][1])
+        for fault in ('timing_missing','timing_seq','timing_sum','timing_over'):
+            with self.subTest(fault=fault),self.assertRaises(p.TransferError):self.run_peer(fault,diagnostics=True)
     def test_unchanged(self):
         r,_,_=self.run_peer(same=True);self.assertEqual(r['frames'][1]['ack']['result'],'unchanged')
     def test_sparse_patch_after_ack(self):

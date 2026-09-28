@@ -22,8 +22,8 @@ from usb_frame import (HEADER, START, FRAME, STOP, SerialIO, TransferError,
 VERSION = 5
 PATCH = 4
 PIXEL_BYTES = 16000
-READY = dict(version='5', panel='untouched', driver='7040c6b', board='H716',
-             quality='NORMAL', gray='4', direct='1', profile='0', packed='1')
+READY = dict(version='5', panel='untouched', driver='32184e6', board='H716',
+             quality='NORMAL', gray='4', direct='1', profile='0', packed='1', timing='0')
 
 
 def packet(kind, session, sequence, payload=b'', version=VERSION):
@@ -79,16 +79,19 @@ def capture_reader(directory, start, count):
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
                 stop_requested=lambda: False, frame_reader=read_frame, after_done=10.0,
-                first_prefix=None):
+                first_prefix=None, timing_diagnostics=False):
     if not 1 <= frames <= 12 or not 1 <= session <= 0xffffffff:
         raise TransferError('세션·프레임 범위 오류')
     io = SerialIO(fd, raw_log, tx_log, metadata)
+    expected_ready = {**READY,'timing':str(int(timing_diagnostics))}
     metadata.update(status='진행 중', started_at=stamp(), session=session, max_frames=frames,
-                    protocol_version=VERSION, bpp=2, frames=[], start_packets_sent=0, stop_packets_sent=0)
+                    protocol_version=VERSION, bpp=2, timing_diagnostics=timing_diagnostics,
+                    frames=[], start_packets_sent=0, stop_packets_sent=0)
     started = False
     deadline = time.monotonic() + 15
     count = applied = 0
     last_elapsed = last_source = 0
+    last_timing_cycle = 0
     previous_payload = bytes(PIXEL_BYTES)
 
     def response(until, boot=False):
@@ -145,7 +148,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         return metadata
 
     marker, v, _ = response(deadline, boot=True)
-    if marker != 'PAINTER_USB_READY' or v != READY:
+    if marker != 'PAINTER_USB_READY' or v != expected_ready:
         raise TransferError('READY 버전·설정 불일치')
     if stop_requested():
         metadata.update(status='시작 전 취소', finished_at=stamp())
@@ -158,7 +161,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     accept_until = time.monotonic()+5
     while True:
         marker,v,_ = response(accept_until)
-        if marker == 'PAINTER_USB_READY' and v == READY: continue
+        if marker == 'PAINTER_USB_READY' and v == expected_ready: continue
         if marker != 'PAINTER_USB_ACCEPT': raise TransferError('ACCEPT 순서 오류')
         break
     exact(v,'session max_frames'); same_session(v)
@@ -198,6 +201,17 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         if marker == 'PAINTER_USB_DONE':
             if v.get('reason') != 'time_limit': raise TransferError('ACK 없는 종료')
             return finish(v,event)
+        if timing_diagnostics and expected_changed:
+            if marker != 'PAINTER_USB_TIMING':raise TransferError('완료 진단 누락')
+            exact(v,'session seq cycle passes discovery_us rowloop_us settle_us neutral_us total_us')
+            same_session(v)
+            timing={key:unsigned(v,key) for key in ('seq','cycle','passes','discovery_us','rowloop_us','settle_us','neutral_us','total_us')}
+            if (timing['seq']!=count+1 or timing['cycle']<=last_timing_cycle or not 1<=timing['passes']<=26 or
+                    sum(timing[k] for k in ('discovery_us','rowloop_us','settle_us','neutral_us'))>timing['total_us']):
+                raise TransferError('완료 진단 회차·시간 오류')
+            last_timing_cycle=timing['cycle']
+            info['driver_timing']={**timing,**event}
+            marker,v,event=response(time.monotonic()+10)
         if marker != 'PAINTER_USB_ACK': raise TransferError('ACK 순서 오류')
         exact(v,'session seq crc result rx_us decode_us display_us clear_us prepare_us paint_us cycles elapsed_us')
         same_session(v)
@@ -206,6 +220,8 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         times = {k:unsigned(v,k) for k in ('rx_us','decode_us','display_us','clear_us','prepare_us','paint_us','cycles','elapsed_us')}
         if kind==FRAME and times['decode_us']:
             raise TransferError('전체 FRAME에 패치 복원 시간')
+        if 'driver_timing' in info and info['driver_timing']['total_us']>times['paint_us']:
+            raise TransferError('드라이버 내부 시간이 paint 시간 초과')
         if times['cycles'] > 1 or times['clear_us']+times['prepare_us']+times['paint_us'] > times['display_us'] or times['elapsed_us'] < last_elapsed:
             raise TransferError('ACK 시간·주기 오류')
         if (count == 0 and times['clear_us'] <= 0) or (count and times['clear_us']):
@@ -232,6 +248,7 @@ def main(argv=None):
     parser.add_argument('--start-sequence',type=int,default=40)
     parser.add_argument('--port',required=True,help='실행 전 동일 장치로 확인한 포트')
     parser.add_argument('--frames',type=int,default=12)
+    parser.add_argument('--timing-diagnostics',action='store_true',help='시간 캡처 진단 앱에만 사용')
     parser.add_argument('--log-prefix',type=Path,required=True)
     args=parser.parse_args(argv)
     if not 1 <= args.frames <= 12: parser.error('--frames는1~12')
@@ -249,7 +266,8 @@ def main(argv=None):
         with paths['raw'].open('xb') as raw,paths['tx'].open('xb') as tx:
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,
-                        stop_requested=lambda:stop,frame_reader=reader,first_prefix=args.log_prefix)
+                        stop_requested=lambda:stop,frame_reader=reader,first_prefix=args.log_prefix,
+                        timing_diagnostics=args.timing_diagnostics)
         print('제한 전송 종료: '+metadata['status'])
         return 0
     except (OSError,ValueError,TransferError) as error:
