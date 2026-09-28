@@ -62,6 +62,23 @@ def analyze(prefix):
     gaps=[(b-a)*1000 for a,b in zip(acks,acks[1:])]
     require(all(g>0 for g in gaps),'ACK 시간 순서 오류')
     gap=distribution(gaps)
+    sources=[f['source_sequence'] for f in frames]
+    source_steps=[b-a for a,b in zip(sources,sources[1:])]
+    host_times={}
+    timing_keys=('read_started_monotonic','read_finished_monotonic','transmission')
+    if any(any(k in f for k in timing_keys) for f in frames):
+        for f in frames:
+            require(all(k in f for k in timing_keys),'호스트 시간 기록 일부 누락')
+            stamps=[f['read_started_monotonic'],f['read_finished_monotonic'],
+                    f['transmission']['send_started_monotonic'],
+                    f['transmission']['send_finished_monotonic'],f['ack']['received_monotonic']]
+            require(all(math.isfinite(t) for t in stamps) and
+                    all(a<=b for a,b in zip(stamps,stamps[1:])),'호스트 시간 순서 오류')
+        host_times={
+            'read_convert_ms':distribution([(f['read_finished_monotonic']-f['read_started_monotonic'])*1000 for f in frames[1:]]),
+            'read_to_ack_ms':distribution([(f['ack']['received_monotonic']-f['read_started_monotonic'])*1000 for f in frames[1:]]),
+            'first_read_to_ack_ms':(frames[0]['ack']['received_monotonic']-frames[0]['read_started_monotonic'])*1000,
+        }
     times={key:distribution([int(f['ack'][key])/1000 for f in frames[1:]])
            for key in ('rx_us','prepare_us','paint_us','display_us')}
     if protocol==5:
@@ -87,6 +104,7 @@ def analyze(prefix):
                 source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),
                 first_display_ms=int(frames[0]['ack']['display_us'])/1000,
                 ack_interval_ms=gap,software_completion_hz=1000/gap['mean'],
+                source_steps=source_steps,skipped_source_frames=sum(s-1 for s in source_steps),host_timing=host_times,
                 subsequent_ms=times,driver_timing=driver,all_frames_changed=all(changed),
                 verified_packet_crc=True,quiet_seconds=observation['after_done_seconds'],
                 meets_single_run_timing=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125,

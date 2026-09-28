@@ -78,5 +78,26 @@ class Tests(unittest.TestCase):
     def test_nearest_rank(self):
         r=a.distribution(list(range(1,12)));self.assertEqual(r['p95'],11)
 
+    def test_host_times_and_source_skips(self):
+        for fault in (None,'reversed','missing','nan'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as d:
+                prefix,obs=self.fixture(d,step=.09)
+                for i,f in enumerate(obs['frames']):
+                    end=f['ack']['received_monotonic'];f['source_sequence']=40+3*i
+                    f.update(read_started_monotonic=end-(1 if i==0 else .085),
+                             read_finished_monotonic=end-.08,
+                             transmission=dict(send_started_monotonic=end-.079,send_finished_monotonic=end-.078))
+                if fault=='reversed':obs['frames'][1]['read_finished_monotonic']=999
+                elif fault=='missing':del obs['frames'][1]['transmission']
+                elif fault=='nan':obs['frames'][1]['read_started_monotonic']=math.nan
+                Path(str(prefix)+'-observation.json').write_text(json.dumps(obs))
+                if fault:
+                    with self.assertRaises(ValueError):a.analyze(prefix)
+                else:
+                    r=a.analyze(prefix);self.assertEqual(r['skipped_source_frames'],22)
+                    self.assertEqual(r['source_steps'],[3]*11)
+                    self.assertAlmostEqual(r['host_timing']['read_to_ack_ms']['mean'],85)
+                    self.assertAlmostEqual(r['host_timing']['first_read_to_ack_ms'],1000)
+
 
 if __name__=='__main__':unittest.main()
