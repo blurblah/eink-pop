@@ -20,7 +20,7 @@ from usb_frame import (HEADER, START, FRAME, STOP, SerialIO, TransferError,
 
 VERSION = 4
 PIXEL_BYTES = 16000
-READY = dict(version='4', panel='untouched', driver='41a69c9', board='H716',
+READY = dict(version='4', panel='untouched', driver='7040c6b', board='H716',
              quality='NORMAL', gray='4', direct='1', profile='0', packed='1')
 
 

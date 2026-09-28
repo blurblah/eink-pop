@@ -83,7 +83,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=4 panel=untouched driver=41a69c9 board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1");
+    Serial.println("PAINTER_USB_READY version=4 panel=untouched driver=7040c6b board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1");
     lastReadyMs = millis();
 }
 
