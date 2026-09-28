@@ -63,7 +63,7 @@ int main(int argc,char**argv){
      EPD_Painter a(width,8,loaded);ReferencePainter b(width,8,loaded);
      for(size_t i=0;i<a.pb.size();++i){a.pb[i]=rng();a.sb[i]=rng();if(i%32<16)a.sb[i]=a.pb[i];}
      std::copy(a.pb.begin(),a.pb.end(),b.pb.begin());std::copy(a.sb.begin(),a.sb.end(),b.sb.begin());
-     for(int cycle=0;cycle<3;++cycle){assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);++cases;}
+     for(int cycle=0;cycle<3;++cycle){assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);++cases; if(mask==63){assert(a.pb==a.sb);if(cycle>0)assert(std::all_of(a.counts.begin(),a.counts.end(),[](uint8_t n){return n==0;}));}}
    }
  }
  for(int from=0;from<4;++from)for(int to=0;to<4;++to){
@@ -84,7 +84,7 @@ int main(int argc,char**argv){
    }
    std::copy(a.pb.begin(),a.pb.end(),b.pb.begin());
    assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);++cases;
-   assert(a.sb==a.pb);
+   assert(a.sb==a.pb);assert(a._decision_discover_direct()==0);
  }
  printf("직접 전이 탐색 %d사례 전체 버퍼/결정/마스크 일치\n",cases);
 }

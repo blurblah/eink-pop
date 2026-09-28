@@ -87,7 +87,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=32184e6 board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1"
+    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=ddcab87 board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1"
 #ifdef PAINTER_USB_DIAGNOSTICS
                    " timing=1"
 #else
