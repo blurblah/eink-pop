@@ -8,7 +8,8 @@ from pathlib import Path
 import statistics
 import struct
 
-from painter_usb import HEADER, START, FRAME, packet
+from painter_usb import HEADER, START, FRAME, PATCH, packet
+from painter_patch import decode as decode_patch
 
 
 def require(condition, message):
@@ -29,21 +30,24 @@ def analyze(prefix):
             observation['after_done_seconds']>=10 and done['reason']=='limit' and
             done['poweroff_returned']=='1' and int(done['frames'])==len(frames) and
             2<=len(frames)<=12, '정상 제한 종료/관측 표본 오류')
-    offset=0; packets=[]
+    offset=0; packets=[]; protocol=None
     while offset<len(wire):
         require(offset+24<=len(wire),'잘린 헤더')
         magic,version,kind,flags,session,seq,size=HEADER.unpack(wire[offset:offset+20])
         require(size<=16000 and offset+size+24<=len(wire),'잘린 본문')
         blob=wire[offset:offset+size+24];payload=blob[20:-4]
-        require(blob==packet(kind,session,seq,payload) and session==observation['session'],'패킷/CRC/세션 오류')
+        if protocol is None: protocol=version
+        require(version==protocol and blob==packet(kind,session,seq,payload,version=version) and session==observation['session'],'패킷/CRC/세션 오류')
         packets.append((kind,seq,payload,struct.unpack('<I',blob[-4:])[0]))
         offset+=len(blob)
     require(len(packets)==len(frames)+1 and packets[0][:2]==(START,0) and
             packets[0][2]==bytes([len(frames)]),'START/패킷 수 오류')
     previous=bytes(16000);changed=[];applied=0;last_source=0
     for i,(f,p) in enumerate(zip(frames,packets[1:])):
-        kind,seq,payload,crc=p;ack=f['ack'];change=payload!=previous
-        require(kind==FRAME and seq==i+1==f['sequence']==int(ack['seq']) and
+        kind,seq,payload,crc=p;ack=f['ack']
+        if kind==PATCH:payload=decode_patch(previous,payload)
+        change=payload!=previous
+        require(kind in (FRAME,PATCH) and seq==i+1==f['sequence']==int(ack['seq']) and
                 int(ack['session'])==observation['session'] and
                 ack['crc']==f'{crc:08x}' and hashlib.sha256(payload).hexdigest()==f['bitmap_sha256'],
                 'FRAME/ACK/본문 해시 불일치')
@@ -60,6 +64,8 @@ def analyze(prefix):
     gap=distribution(gaps)
     times={key:distribution([int(f['ack'][key])/1000 for f in frames[1:]])
            for key in ('rx_us','prepare_us','paint_us','display_us')}
+    if protocol==5:
+        times['decode_us']=distribution([int(f['ack']['decode_us'])/1000 for f in frames[1:]])
     return dict(input_mode=observation.get('input_mode','latest_file'),frames=len(frames),
                 source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),
                 first_display_ms=int(frames[0]['ack']['display_us'])/1000,

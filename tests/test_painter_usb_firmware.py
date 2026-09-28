@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""실제 v4 수신 스케치의 파서·픽셀·패널 접근 시점·실패 종료 검증."""
+"""실제 v5 수신 스케치의 파서·픽셀·패널 접근 시점·실패 종료 검증."""
 from pathlib import Path
 import struct
 import subprocess
@@ -113,7 +113,7 @@ int main(int argc,char**argv){
  }
  auto start=file(dir+"/start.bin");auto first=file(dir+"/first.bin");auto second=file(dir+"/second.bin");
  if(scenario=="start_crc")start.back()^=1;
- if(scenario=="old_version"){start[4]=3;crc(start);}
+if(scenario=="old_version"){start[4]=4;crc(start);}
  if(scenario=="limit"){start[20]=13;crc(start);}
  if(scenario=="early")start.insert(start.end(),first.begin(),first.end());
  if(scenario=="full"){start[20]=12;crc(start);}
@@ -127,21 +127,27 @@ int main(int argc,char**argv){
   if(scenario=="sequence"){first[12]=2;crc(first);}
   if(scenario=="length"){first[16]=0;crc(first);}
   if(scenario=="white")first=file(dir+"/white.bin");
+  if(scenario=="patch_first")first=file(dir+"/patch_first.bin");
   expected.assign(first.begin()+20,first.end()-4);feed(first);
   if(state!=TERMINAL){
    if(scenario=="stop")feed(file(dir+"/stop2.bin"));
    else if(scenario=="screen_timeout"){clockUs+=30000000;loop();}
    else {
     if(scenario=="same"||scenario=="white"){second=first;second[12]=2;crc(second);}
-    expected.assign(second.begin()+20,second.end()-4);feed(second);
+    expected.assign(second.begin()+20,second.end()-4);
+    if(scenario.rfind("patch",0)==0){second=file(dir+"/"+scenario+".bin");expected=file(dir+"/"+scenario+".expected");}
+    feed(second);
     if(scenario=="full")for(int n=3;n<=12;++n){second[12]=n;crc(second);feed(second);}
    }
   }
  }
- bool ok=scenario=="normal"||scenario=="same"||scenario=="white"||scenario=="full"||scenario=="stop"||scenario=="stop_before"||scenario=="screen_timeout"||scenario=="slow_paint";
+ bool ok=scenario=="patch"||scenario=="patch_same"||scenario=="normal"||scenario=="same"||scenario=="white"||scenario=="full"||scenario=="stop"||scenario=="stop_before"||scenario=="screen_timeout"||scenario=="slow_paint";
  assert(state==TERMINAL);
- if(ok){assert(Serial.output.find("PAINTER_USB_ERROR")==std::string::npos);assert(Serial.output.find("PAINTER_USB_DONE")!=std::string::npos);assert(offs==(scenario=="stop_before"?0:1));assert(frees==3);}
+ if(ok){assert(Serial.output.find("PAINTER_USB_ERROR")==std::string::npos);assert(Serial.output.find("PAINTER_USB_DONE")!=std::string::npos);assert(offs==(scenario=="stop_before"?0:1));assert(frees==4);}
  else {assert(Serial.output.find("PAINTER_USB_ERROR")!=std::string::npos);if(panelInitialized)assert(offs==1);if(scenario=="off")assert(Serial.output.find("PAINTER_USB_DONE")==std::string::npos);}
+ if(scenario=="patch")assert(paints==2&&frames==2);
+ if(scenario=="patch_same")assert(paints==1&&frames==2);
+ if(scenario.rfind("patch_",0)==0 && scenario!="patch_same")assert(paints==(scenario=="patch_first"?0:1));
  if(scenario=="normal")assert(paints==2&&frames==2&&applied==2);
  if(scenario=="same")assert(paints==1&&frames==2&&applied==1);
  if(scenario=="white")assert(paints==0&&clears==1&&frames==2&&applied==1);
@@ -150,20 +156,22 @@ int main(int argc,char**argv){
  if(scenario=="direct"||scenario=="begin")assert(clears==0&&paints==0);
  auto output=Serial.output;auto before=paints;feed(start);loop();assert(Serial.output==output&&paints==before);
  // OFF 실패 시 실제 스케치가 보존한 버퍼는 이 검사 프로세스에서만 정리한다.
- if(previous)free(previous);if(incoming)free(incoming);if(canvas)free(canvas);
+ if(previous)free(previous);if(incoming)free(incoming);if(canvas)free(canvas);if(encoded)free(encoded);
  std::cout<<scenario<<": 통과\n";
 }
 '''
 
 def packet(kind,seq,payload):
-    body=struct.pack('<4sBBHIII',b'EPK1',4,kind,0,123,seq,len(payload))+payload
+    body=struct.pack('<4sBBHIII',b'EPK1',5,kind,0,123,seq,len(payload))+payload
     return body+struct.pack('<I',zlib.crc32(body)&0xffffffff)
 
 def main():
     cases=['normal','same','white','full','stop','stop_before','screen_timeout','slow_paint',
            'start_crc','frame_crc','old_version','limit','early','partial_timeout','session','sequence','length',
            'cpu','no_psram','small_psram','alloc','rx_buffer','rx_queue','rx_read','begin','direct',
-           'clear_timeout','paint_timeout','cycles','off','disconnect']
+           'clear_timeout','paint_timeout','cycles','off','disconnect',
+           'patch','patch_same','patch_first','patch_crc','patch_header','patch_zero','patch_long',
+           'patch_row','patch_end','patch_truncated','patch_duplicate','patch_reverse','patch_size']
     with tempfile.TemporaryDirectory(prefix='painter-usb-qa-') as d:
         p=Path(d);(p/'esp32s3').mkdir()
         for name,data in [('Arduino.h',ARDUINO),('EPD_Painter.h',EPD),('check.cpp',HARNESS),
@@ -174,6 +182,25 @@ def main():
         a=bytes(range(256))*62+bytes(range(128));assert len(a)==16000
         for name,data in [('start',packet(1,0,b'\x02')),('first',packet(2,1,a)),('second',packet(2,2,bytes(255-x for x in a))),('white',packet(2,1,bytes(16000))),('stop1',packet(3,1,b'')),('stop2',packet(3,2,b''))]:
             (p/(name+'.bin')).write_bytes(data)
+        target=bytearray(a)
+        encoded_patch=bytearray()
+        for offset,data in [(0,b'\x01'*80),(80,b'\x1b'),(15999,b'\xe4')]:
+            target[offset:offset+len(data)]=data
+            encoded_patch.extend(struct.pack('<HB',offset,len(data))+data)
+        patches={'patch':bytes(encoded_patch),'patch_same':b'', 'patch_first':b'',
+                 'patch_crc':b'', 'patch_header':b'\x00', 'patch_zero':b'\x00\x00\x00',
+                 'patch_long':struct.pack('<HB',0,81)+bytes(81),
+                 'patch_row':struct.pack('<HB',79,2)+bytes(2),
+                 'patch_end':struct.pack('<HB',65535,1)+b'x',
+                 'patch_truncated':struct.pack('<HB',0,2)+b'x',
+                 'patch_duplicate':(struct.pack('<HB',0,1)+b'x')*2,
+                 'patch_reverse':struct.pack('<HB',80,1)+b'x'+struct.pack('<HB',0,1)+b'x',
+                 'patch_size':bytes(16000)}
+        for name,data in patches.items():
+            wire=packet(4,1 if name=='patch_first' else 2,data)
+            if name=='patch_crc':wire=wire[:-1]+bytes([wire[-1]^1])
+            (p/(name+'.bin')).write_bytes(wire)
+            (p/(name+'.expected')).write_bytes(target if name=='patch' else a)
         subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',d,
                         f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
         for case in cases:subprocess.run([str(p/'check'),case,d],check=True,timeout=10)

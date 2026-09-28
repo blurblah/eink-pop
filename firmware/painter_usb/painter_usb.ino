@@ -1,4 +1,4 @@
-// EPK1 v4 / 2bpp 제한 수신. CRC 확인 전에는 패널을 초기화하지 않는다.
+// EPK1 v5 / 2bpp·무손실 행 패치. CRC 확인 전에는 패널을 초기화하지 않는다.
 // 수신 상태 머신은 firmware/usb_frame의 검증된 EPK1 구조를 사용한다.
 #include <Arduino.h>
 #include <EPD_Painter.h>
@@ -20,7 +20,7 @@ enum SessionState { WAIT_START, WAIT_FRAME, TERMINAL };
 static SessionState state = WAIT_START;
 static uint32_t session = 0, expectedSequence = 1;
 static uint32_t frameLimit = 0, frames = 0, applied = 0;
-static uint8_t *previous = nullptr, *incoming = nullptr, *canvas = nullptr;
+static uint8_t *previous = nullptr, *incoming = nullptr, *canvas = nullptr, *encoded = nullptr;
 static bool panelInitialized = false;
 static int64_t screenStart = -1, receiveWindow = -1, packetStart = -1;
 static uint32_t lastReadyMs = 0;
@@ -69,7 +69,8 @@ static void finish(const char *reason)
     if (previous) heap_caps_free(previous);
     if (incoming) heap_caps_free(incoming);
     if (canvas) heap_caps_free(canvas);
-    previous = incoming = canvas = nullptr;
+    if (encoded) heap_caps_free(encoded);
+    previous = incoming = canvas = encoded = nullptr;
     Serial.printf("PAINTER_USB_DONE session=%lu reason=%s frames=%lu applied=%lu poweroff_returned=%d\r\n",
                   (unsigned long)session, reason, (unsigned long)frames,
                   (unsigned long)applied, panelInitialized ? 1 : 0);
@@ -83,7 +84,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=4 panel=untouched driver=7040c6b board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1");
+    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=7040c6b board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1");
     lastReadyMs = millis();
 }
 
@@ -104,7 +105,7 @@ static bool checkLimits()
 
 static bool validateHeader()
 {
-    if (memcmp(header, "EPK1", 4) != 0 || header[4] != 4 || header[6] || header[7]) {
+    if (memcmp(header, "EPK1", 4) != 0 || header[4] != 5 || header[6] || header[7]) {
         fail("header");
         return false;
     }
@@ -126,8 +127,9 @@ static bool validateHeader()
             fail("sequence");
             return false;
         }
-        if ((type != 2 && type != 3) ||
-            (type == 2 && payloadLength != SOURCE_BYTES) || (type == 3 && payloadLength != 0)) {
+        if ((type != 2 && type != 3 && type != 4) ||
+            (type == 2 && payloadLength != SOURCE_BYTES) || (type == 3 && payloadLength != 0) ||
+            (type == 4 && (frames == 0 || payloadLength >= SOURCE_BYTES))) {
             fail("frame_header");
             return false;
         }
@@ -151,7 +153,8 @@ static void beginSession(uint32_t id)
     previous = (uint8_t *)heap_caps_malloc(SOURCE_BYTES, caps);
     incoming = (uint8_t *)heap_caps_malloc(SOURCE_BYTES, caps);
     canvas = (uint8_t *)heap_caps_malloc(CANVAS_BYTES, caps);
-    if (!previous || !incoming || !canvas) { fail("allocation_failed"); return; }
+    encoded = (uint8_t *)heap_caps_malloc(SOURCE_BYTES, caps);
+    if (!previous || !incoming || !canvas || !encoded) { fail("allocation_failed"); return; }
     memset(previous, 0, SOURCE_BYTES);
     // 여백은 부팅당 한 번만 초기화한다. paintPacked는 이 입력을 복사한다.
     memset(canvas, 0, CANVAS_BYTES);
@@ -175,7 +178,7 @@ static void expandFrame()
     }
 }
 
-static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs)
+static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, int64_t decodeUs)
 {
     if (!checkLimits()) return;
     const int64_t displayStart = esp_timer_get_time();
@@ -221,9 +224,9 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs)
         if (esp_timer_get_time() - ackWait >= 100000) { fail("ack_connection"); return; }
         delay(1);
     }
-    Serial.printf("PAINTER_USB_ACK session=%lu seq=%lu crc=%08lx result=%s rx_us=%lld display_us=%lld clear_us=%lld prepare_us=%lld paint_us=%lld cycles=%lu elapsed_us=%lld\r\n",
+    Serial.printf("PAINTER_USB_ACK session=%lu seq=%lu crc=%08lx result=%s rx_us=%lld decode_us=%lld display_us=%lld clear_us=%lld prepare_us=%lld paint_us=%lld cycles=%lu elapsed_us=%lld\r\n",
                   (unsigned long)session, (unsigned long)sequence, (unsigned long)packetCrc,
-                  firstFrame || changed ? "applied" : "unchanged", (long long)rxUs,
+                  firstFrame || changed ? "applied" : "unchanged", (long long)rxUs, (long long)decodeUs,
                   (long long)(ended - displayStart), (long long)clearUs,
                   (long long)prepareUs, (long long)paintUs, (unsigned long)cycles,
                   (long long)(ended - screenStart));
@@ -232,6 +235,26 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs)
     if (frames >= frameLimit) finish("limit");
     else if (ended - screenStart >= SCREEN_LIMIT_US) finish("time_limit");
     else receiveWindow = esp_timer_get_time();
+}
+
+static bool decodePatch()
+{
+    memcpy(incoming, previous, SOURCE_BYTES);
+    size_t at = 0;
+    int lastRow = -1;
+    while (at < payloadLength) {
+        if (payloadLength - at < 3) return false;
+        const size_t offset = (size_t)encoded[at] | ((size_t)encoded[at + 1] << 8);
+        const size_t count = encoded[at + 2];
+        at += 3;
+        const int row = offset / 80;
+        if (count < 1 || count > 80 || offset + count > SOURCE_BYTES ||
+            offset % 80 + count > 80 || row <= lastRow || count > payloadLength - at) return false;
+        memcpy(incoming + offset, encoded + at, count);
+        at += count;
+        lastRow = row;
+    }
+    return true;
 }
 
 static void completePacket()
@@ -245,10 +268,13 @@ static void completePacket()
     }
     const uint8_t type = header[5];
     const uint32_t id = readLe32(header + 8), sequence = readLe32(header + 12);
+    const int64_t decodeStart = esp_timer_get_time();
+    if (type == 4 && !decodePatch()) { fail("patch"); return; }
+    const int64_t decodeUs = type == 4 ? esp_timer_get_time() - decodeStart : 0;
     resetPacket();
     if (type == 1) beginSession(id);
     else if (type == 3) finish("stop");
-    else displayFrame(sequence, packetCrc, rxUs);
+    else displayFrame(sequence, packetCrc, rxUs, decodeUs);
 }
 
 static size_t readChunk(uint8_t *destination, size_t remaining, int available)
@@ -296,7 +322,7 @@ void loop()
             if (state == TERMINAL) return;
             if (headerUsed == sizeof(header) && !validateHeader()) return;
         } else if (payloadUsed < payloadLength) {
-            uint8_t *destination = state == WAIT_START ? &startPayload : incoming;
+            uint8_t *destination = state == WAIT_START ? &startPayload : (header[5] == 4 ? encoded : incoming);
             received = readChunk(destination + payloadUsed, payloadLength - payloadUsed, available);
             if (state == TERMINAL) return;
             runningCrc = updateCrc(runningCrc, destination + payloadUsed, received);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""H716 NORMAL에 최신 게임 화면을 보내는 EPK1 v4 / 2bpp 제한 전송."""
+"""H716 NORMAL에 최신 게임 화면을 보내는 EPK1 v5 / 무손실 행 패치 전송."""
 import argparse
 import hashlib
 import json
@@ -15,22 +15,25 @@ import zlib
 
 from prepare_painter_clip import convert, unpack
 from compare_captures import load_capture
+from painter_patch import encode as encode_patch
 from usb_frame import (HEADER, START, FRAME, STOP, SerialIO, TransferError,
                        ResponseTimeout, open_serial, fields_of, unsigned, exact, stamp)
 
-VERSION = 4
+VERSION = 5
+PATCH = 4
 PIXEL_BYTES = 16000
-READY = dict(version='4', panel='untouched', driver='7040c6b', board='H716',
+READY = dict(version='5', panel='untouched', driver='7040c6b', board='H716',
              quality='NORMAL', gray='4', direct='1', profile='0', packed='1')
 
 
-def packet(kind, session, sequence, payload=b''):
+def packet(kind, session, sequence, payload=b'', version=VERSION):
     valid = (kind == START and sequence == 0 and len(payload) == 1 and 1 <= payload[0] <= 12
              or kind == FRAME and sequence > 0 and len(payload) == PIXEL_BYTES
+             or version == 5 and kind == PATCH and sequence > 1 and len(payload) < PIXEL_BYTES
              or kind == STOP and sequence > 0 and not payload)
-    if not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
+    if version not in (4,5) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
         raise TransferError('패킷 종류·세션·순서·길이 오류')
-    body = HEADER.pack(b'EPK1', VERSION, kind, 0, session, sequence, len(payload)) + payload
+    body = HEADER.pack(b'EPK1', version, kind, 0, session, sequence, len(payload)) + payload
     return body + struct.pack('<I', zlib.crc32(body) & 0xffffffff)
 
 
@@ -81,7 +84,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         raise TransferError('세션·프레임 범위 오류')
     io = SerialIO(fd, raw_log, tx_log, metadata)
     metadata.update(status='진행 중', started_at=stamp(), session=session, max_frames=frames,
-                    protocol_version=4, bpp=2, frames=[], start_packets_sent=0, stop_packets_sent=0)
+                    protocol_version=VERSION, bpp=2, frames=[], start_packets_sent=0, stop_packets_sent=0)
     started = False
     deadline = time.monotonic() + 15
     count = applied = 0
@@ -184,9 +187,11 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             with Path(str(first_prefix)+'-first.pgm').open('xb') as f:
                 f.write(b'P5\n320 200\n255\n'+bytes(255-v*85 for v in unpack(payload)))
         expected_changed = payload != previous_payload
-        wire = packet(FRAME,session,count+1,payload)
+        encoded = encode_patch(previous_payload,payload) if count else None
+        kind = FRAME if encoded is None else PATCH
+        wire = packet(kind,session,count+1,payload if encoded is None else encoded)
         crc = struct.unpack('<I',wire[-4:])[0]
-        info.update(sequence=count+1,crc=f'{crc:08x}')
+        info.update(sequence=count+1,crc=f'{crc:08x}',packet_type=kind,wire_payload_bytes=len(wire)-24)
         metadata['frames'].append(info)
         info['transmission'] = io.write_all(wire,receive_deadline)
         marker,v,event = response(time.monotonic()+10)
@@ -194,11 +199,13 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             if v.get('reason') != 'time_limit': raise TransferError('ACK 없는 종료')
             return finish(v,event)
         if marker != 'PAINTER_USB_ACK': raise TransferError('ACK 순서 오류')
-        exact(v,'session seq crc result rx_us display_us clear_us prepare_us paint_us cycles elapsed_us')
+        exact(v,'session seq crc result rx_us decode_us display_us clear_us prepare_us paint_us cycles elapsed_us')
         same_session(v)
         if unsigned(v,'seq') != count+1 or v['crc'] != f'{crc:08x}': raise TransferError('ACK 순서·CRC 오류')
         if v['result'] not in ('applied','unchanged'): raise TransferError('ACK 적용 결과 오류')
-        times = {k:unsigned(v,k) for k in ('rx_us','display_us','clear_us','prepare_us','paint_us','cycles','elapsed_us')}
+        times = {k:unsigned(v,k) for k in ('rx_us','decode_us','display_us','clear_us','prepare_us','paint_us','cycles','elapsed_us')}
+        if kind==FRAME and times['decode_us']:
+            raise TransferError('전체 FRAME에 패치 복원 시간')
         if times['cycles'] > 1 or times['clear_us']+times['prepare_us']+times['paint_us'] > times['display_us'] or times['elapsed_us'] < last_elapsed:
             raise TransferError('ACK 시간·주기 오류')
         if (count == 0 and times['clear_us'] <= 0) or (count and times['clear_us']):
