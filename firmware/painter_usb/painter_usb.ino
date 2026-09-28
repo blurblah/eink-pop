@@ -176,14 +176,21 @@ static void expandFrame()
 {
     uint8_t expanded[160];
     for (int y = 0; y < 200; ++y) {
+        const uint8_t *next = incoming + y * 80;
+        const uint8_t *prior = previous + y * 80;
+        if (memcmp(next, prior, 80) == 0) continue;
+        int first = 0, last = 79;
+        while (next[first] == prior[first]) ++first;
+        while (next[last] == prior[last]) --last;
         uint8_t *row = canvas + (70 + y * 2) * 240 + 40;
-        for (int x = 0; x < 80; ++x) {
-            const uint8_t b = incoming[y * 80 + x];
+        for (int x = first; x <= last; ++x) {
+            const uint8_t b = next[x];
             expanded[x * 2] = ((b >> 6) * 0x50) | (((b >> 4) & 3) * 0x05);
             expanded[x * 2 + 1] = (((b >> 2) & 3) * 0x50) | ((b & 3) * 0x05);
         }
-        memcpy(row, expanded, sizeof(expanded));
-        memcpy(row + 240, expanded, sizeof(expanded));
+        const size_t count = (last - first + 1) * 2;
+        memcpy(row + first * 2, expanded + first * 2, count);
+        memcpy(row + 240 + first * 2, expanded + first * 2, count);
     }
 }
 
