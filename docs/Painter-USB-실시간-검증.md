@@ -88,3 +88,7 @@ START1회·FRAME12개 각각의 wire CRC·본문 SHA-256·ACK 세션/순서/CRC�
 최초 초기화 뒤 원본 번호가8장, 이후3~4장씩 건너뛰어 최신 화면 선택을 확인했다. 녹화12장을 모두 느리게 재생한 시험과 달리 게임 로직은 계속 진행했다. 프레임 건너뛰기를 누락/CRC 오류로 해석하지 않는다. 게임 장면이 이전 녹화 클립과 다르므로 display189~196ms를 동일 화면 드라이버 가속으로 주장하지 않는다. 3.42는 호스트 ACK 간격의 역수이며 광학fps·버튼 입력 지연은 아니다. 파일mtime 범위도 실제 게임 로직 시각·입력 시각과 별도다.
 
 사용자는 시작이 늦어 몇 장면만 보았으며 느림인지 끊김인지 판단하지 못했다고 답했다. 따라서 실시간 조작감·잔상·하얗게 보임은 확인되지 않았다. 2026-09-29부터 사용자 승인으로 [성능 개선 반복](성능-개선-반복.md)의 수치·사용량 종료 조건에 따라 진행한다. 원본은 `artifacts/painter-live-20260928/{live-runtime.log,live-tx.bin,live-observation.json,timing-summary.json,play-result.json}`, 게임 상태·로그는 `artifacts/painter-live-game-20260928/`, 초기 정리는 `artifacts/painter-live-clean-20260928/`에 보존한다.
+
+## 최적화 후 FAST 속도 진단
+
+기본 빌드와 호스트는 NORMAL이다. `PAINTER_USB_FAST`로 빌드한 앱은 READY에 `quality=FAST`를 표시하며 호스트도 명시적 `--quality FAST`가 있어야 START를 보낸다. 모드 불일치는 시작 전에 거부한다. 분석기는 `meets_numeric_timing`과 NORMAL 기준 `meets_single_run_timing`을 구분한다. FAST가100ms를 넘더라도/밑돌더라도 NORMAL의 화질 목표를 달성한 것으로 판정하지 않는다. 이전 FAST의 잔상·흐릿함 관찰은 여전히 유효하며, 이번 회차의 속도와 NORMAL 복구 근거는 `성능-개선-반복.md`를 따른다.

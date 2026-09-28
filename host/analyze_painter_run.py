@@ -100,14 +100,17 @@ def analyze(prefix):
             driver=dict(passes=[t['passes'] for t in captured],
                         subsequent_ms={k:distribution([t[k]/1000 for t in captured]) for k in
                                        ('discovery_us','rowloop_us','settle_us','neutral_us','total_us')})
-    return dict(input_mode=observation.get('input_mode','latest_file'),frames=len(frames),
+    quality=observation.get('quality','NORMAL') # 옵션 도입 전 v4/v5 호스트는 NORMAL 전용이었다.
+    require(quality in ('NORMAL','FAST'),'알 수 없는 화질 모드')
+    numeric=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125
+    return dict(input_mode=observation.get('input_mode','latest_file'),quality=quality,frames=len(frames),
                 source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),
                 first_display_ms=int(frames[0]['ack']['display_us'])/1000,
                 ack_interval_ms=gap,software_completion_hz=1000/gap['mean'],
                 source_steps=source_steps,skipped_source_frames=sum(s-1 for s in source_steps),host_timing=host_times,
                 subsequent_ms=times,driver_timing=driver,all_frames_changed=all(changed),
                 verified_packet_crc=True,quiet_seconds=observation['after_done_seconds'],
-                meets_single_run_timing=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125,
+                meets_numeric_timing=numeric,meets_single_run_timing=quality=='NORMAL' and numeric,
                 limitation='단일 제한 실행. 캡처 재생은 실시간 목표 달성이 아니며 ACK는 광학fps·입력 지연이 아니다.')
 
 

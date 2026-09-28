@@ -17,6 +17,13 @@
 static constexpr size_t SOURCE_BYTES = 16000, CANVAS_BYTES = 129600;
 static constexpr int64_t RX_LIMIT_US = 5000000, SCREEN_LIMIT_US = 30000000;
 static constexpr uint32_t WAIT_MS = 5000;
+#ifdef PAINTER_USB_FAST
+#define PAINTER_USB_QUALITY_NAME "FAST"
+static constexpr auto DISPLAY_QUALITY = EPD_Painter::Quality::QUALITY_FAST;
+#else
+#define PAINTER_USB_QUALITY_NAME "NORMAL"
+static constexpr auto DISPLAY_QUALITY = EPD_Painter::Quality::QUALITY_NORMAL;
+#endif
 static EPD_Painter panel(EPD_LILYGO_EPD47_H716_PRESET);
 
 enum SessionState { WAIT_START, WAIT_FRAME, TERMINAL };
@@ -87,7 +94,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=afa69d8 board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1"
+    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=afa69d8 board=H716 quality=" PAINTER_USB_QUALITY_NAME " gray=4 direct=1 profile=0 packed=1"
 #ifdef PAINTER_USB_DIAGNOSTICS
                    " timing=1"
 #else
@@ -217,7 +224,7 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
         screenStart = esp_timer_get_time();
         panel.setAutoShutdown(false);
         panel.setIdleTimeout(60);
-        panel.setQuality(EPD_Painter::Quality::QUALITY_NORMAL);
+        panel.setQuality(DISPLAY_QUALITY);
         panel.setPaintProfile(false);
         if (!panel.begin()) { fail("begin_failed"); return; }
         panelInitialized = true;

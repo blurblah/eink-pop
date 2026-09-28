@@ -75,6 +75,13 @@ class Tests(unittest.TestCase):
                 elif fault=='nan':obs['frames'][1]['ack']['received_monotonic']=math.nan
                 Path(str(prefix)+'-observation.json').write_text(json.dumps(obs))
                 with self.assertRaises(ValueError):a.analyze(prefix)
+    def test_fast_speed_does_not_meet_normal_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            prefix,obs=self.fixture(d,step=.09);obs['quality']='FAST'
+            Path(str(prefix)+'-observation.json').write_text(json.dumps(obs))
+            r=a.analyze(prefix);self.assertTrue(r['meets_numeric_timing'])
+            self.assertFalse(r['meets_single_run_timing']);self.assertEqual(r['quality'],'FAST')
+
     def test_nearest_rank(self):
         r=a.distribution(list(range(1,12)));self.assertEqual(r['p95'],11)
 

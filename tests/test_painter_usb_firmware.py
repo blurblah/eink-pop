@@ -36,7 +36,7 @@ EPD=r'''
 #define EPD_LILYGO_EPD47_H716_PRESET 716
 class EPD_Painter {
 public:
- enum class Quality {QUALITY_NORMAL};
+ enum class Quality {QUALITY_NORMAL,QUALITY_FAST};
  explicit EPD_Painter(int x) { if(x!=716)__builtin_trap(); }
  void setAutoShutdown(bool); void setIdleTimeout(int); void setQuality(Quality); void setPaintProfile(bool);
  bool begin(); bool setDirectTransitions(bool); void clearBuffers(); void clear();
@@ -83,7 +83,7 @@ void MockSerial::println(const char*s){output+=std::string(s)+"\n";}
 void MockSerial::printf(const char*fmt,...){char text[768];va_list ap;va_start(ap,fmt);vsnprintf(text,sizeof(text),fmt,ap);va_end(ap);if(strstr(text,"PAINTER_USB_ACK")==text)assert(!busy);if(strstr(text,"PAINTER_USB_DONE")==text)assert(!busy);output+=text;}
 void EPD_Painter::setAutoShutdown(bool x){autoOff=x;}
 void EPD_Painter::setIdleTimeout(int x){idle=x;}
-void EPD_Painter::setQuality(Quality){quality=true;}
+void EPD_Painter::setQuality(Quality q){assert(q==DISPLAY_QUALITY);quality=true;}
 void EPD_Painter::setPaintProfile(bool x){profile=x;}
 bool EPD_Painter::begin(){assert(!autoOff&&!profile&&quality&&idle==60);++begins;return scenario!="begin";}
 bool EPD_Painter::setDirectTransitions(bool x){assert(x&&begins==1&&!clears);direct=true;return scenario!="direct";}
@@ -118,6 +118,7 @@ static void crc(std::vector<uint8_t>&p){uint32_t c=updateCrc(0xffffffff,p.data()
 int main(int argc,char**argv){
  assert(argc==3);scenario=argv[1];std::string dir=argv[2];setup();
  assert(begins==0&&clears==0&&paints==0);
+ if(scenario!="rx_buffer")assert(Serial.output.find("quality=" PAINTER_USB_QUALITY_NAME)!=std::string::npos);
  const uint8_t known[]="123456789";assert((updateCrc(0xffffffff,known,9)^0xffffffff)==0xcbf43926);
  // 전 바이트 값·임의 초기 상태·모든 분할점에서 독립 비트 구현과 비교.
  uint8_t data[256];for(int i=0;i<256;++i)data[i]=i;
@@ -218,12 +219,13 @@ def main():
             (p/(name+'.bin')).write_bytes(wire)
             (p/(name+'.expected')).write_bytes(target if name=='patch' else a)
         total=0
-        for diagnostics in (False,True):
+        for fast,diagnostics in ((False,False),(False,True),(True,False),(True,True)):
             flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING'] if diagnostics else []
+            if fast:flags.append('-DPAINTER_USB_FAST')
             subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',d,*flags,
                             f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
             selected=cases+(['timing_missing','timing_cycle'] if diagnostics else [])
             for case in selected:subprocess.run([str(p/'check'),case,d],check=True,timeout=10,stdout=subprocess.DEVNULL)
             total+=len(selected)
-        print(f'실제 USB 스케치 일반/진단 {total}사례 통과')
+        print(f'실제 USB 스케치 NORMAL/FAST·일반/진단 {total}사례 통과')
 if __name__=='__main__':main()

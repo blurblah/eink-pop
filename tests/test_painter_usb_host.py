@@ -14,12 +14,12 @@ import painter_usb as p
 from painter_patch import decode as decode_patch
 
 class Peer:
-    def __init__(self, fault='', stop=False, diagnostics=False):
+    def __init__(self, fault='', stop=False, diagnostics=False, quality='NORMAL'):
         self.fault=fault; self.pending=bytearray(); self.queue=[]; self.sent=[]
         self.diagnostics=diagnostics
         self.acks=0;self.n=0;self.applied=0;self.total=2;self.previous=bytes(16000)
         ready=p.READY.copy()
-        ready['timing']=str(int(diagnostics))
+        ready['timing']=str(int(diagnostics));ready['quality']=quality
         if fault=='ready':ready['version']='3'
         self.emit('READY',ready)
     def emit(self,marker,v):self.queue.append('PAINTER_USB_'+marker+' '+' '.join(f'{k}={x}' for k,x in v.items()))
@@ -89,8 +89,8 @@ class Tests(unittest.TestCase):
             file=directory/'frame-0002.ppm'; file.write_bytes(file.read_bytes().replace(bytes([120])*3,bytes([119])*3,1))
             with self.assertRaises(p.TransferError):reader(None)
 
-    def run_peer(self,fault='',stop=False,same=False,diagnostics=False):
-        peer=Peer(fault,diagnostics=diagnostics);meta={};reads=[]
+    def run_peer(self,fault='',stop=False,same=False,diagnostics=False,quality='NORMAL'):
+        peer=Peer(fault,diagnostics=diagnostics,quality=quality);meta={};reads=[]
         def reader(_):
             self.assertEqual(len(reads),peer.acks) # 완료 응답을 소비한 뒤에만 최신 파일 읽기
             seq=(4,9)[len(reads)];reads.append(seq)
@@ -99,7 +99,7 @@ class Tests(unittest.TestCase):
         with patch.object(p,'SerialIO',return_value=peer):
             result=p.run_session(-1,'unused',2,123,meta,frame_reader=reader,after_done=0,
                                  stop_requested=(lambda:bool(peer.sent)) if stop else (lambda:False),
-                                 timing_diagnostics=diagnostics)
+                                 timing_diagnostics=diagnostics,quality=quality)
         return result,peer,reads
     def test_latest_after_ack(self):
         r,peer,reads=self.run_peer();self.assertEqual(reads,[4,9]);self.assertEqual(r['status'],'통과')
@@ -111,6 +111,14 @@ class Tests(unittest.TestCase):
         self.assertNotIn('driver_timing',r['frames'][1])
         for fault in ('timing_missing','timing_seq','timing_sum','timing_over'):
             with self.subTest(fault=fault),self.assertRaises(p.TransferError):self.run_peer(fault,diagnostics=True)
+    def test_explicit_quality(self):
+        r,_,_=self.run_peer(quality='FAST');self.assertEqual(r['quality'],'FAST')
+        for actual,requested in [('FAST','NORMAL'),('NORMAL','FAST')]:
+            peer=Peer(quality=actual)
+            with patch.object(p,'SerialIO',return_value=peer),self.assertRaises(p.TransferError):
+                p.run_session(-1,'unused',2,123,{},quality=requested)
+            self.assertEqual(peer.sent,[])
+
     def test_unchanged(self):
         r,_,_=self.run_peer(same=True);self.assertEqual(r['frames'][1]['ack']['result'],'unchanged')
     def test_sparse_patch_after_ack(self):

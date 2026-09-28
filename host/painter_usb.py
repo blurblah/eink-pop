@@ -79,13 +79,14 @@ def capture_reader(directory, start, count):
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
                 stop_requested=lambda: False, frame_reader=read_frame, after_done=10.0,
-                first_prefix=None, timing_diagnostics=False):
+                first_prefix=None, timing_diagnostics=False, quality='NORMAL'):
     if not 1 <= frames <= 12 or not 1 <= session <= 0xffffffff:
         raise TransferError('세션·프레임 범위 오류')
+    if quality not in ('NORMAL','FAST'):raise TransferError('지원하지 않는 화질 모드')
     io = SerialIO(fd, raw_log, tx_log, metadata)
-    expected_ready = {**READY,'timing':str(int(timing_diagnostics))}
+    expected_ready = {**READY,'timing':str(int(timing_diagnostics)),'quality':quality}
     metadata.update(status='진행 중', started_at=stamp(), session=session, max_frames=frames,
-                    protocol_version=VERSION, bpp=2, timing_diagnostics=timing_diagnostics,
+                    protocol_version=VERSION, bpp=2, timing_diagnostics=timing_diagnostics, quality=quality,
                     frames=[], start_packets_sent=0, stop_packets_sent=0)
     started = False
     deadline = time.monotonic() + 15
@@ -249,6 +250,7 @@ def main(argv=None):
     parser.add_argument('--port',required=True,help='실행 전 동일 장치로 확인한 포트')
     parser.add_argument('--frames',type=int,default=12)
     parser.add_argument('--timing-diagnostics',action='store_true',help='시간 캡처 진단 앱에만 사용')
+    parser.add_argument('--quality',choices=('NORMAL','FAST'),default='NORMAL',help='FAST는 별도 속도 진단 앱에만 사용')
     parser.add_argument('--log-prefix',type=Path,required=True)
     args=parser.parse_args(argv)
     if not 1 <= args.frames <= 12: parser.error('--frames는1~12')
@@ -267,7 +269,7 @@ def main(argv=None):
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,
                         stop_requested=lambda:stop,frame_reader=reader,first_prefix=args.log_prefix,
-                        timing_diagnostics=args.timing_diagnostics)
+                        timing_diagnostics=args.timing_diagnostics,quality=args.quality)
         print('제한 전송 종료: '+metadata['status'])
         return 0
     except (OSError,ValueError,TransferError) as error:
