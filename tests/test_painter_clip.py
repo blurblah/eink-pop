@@ -4,13 +4,47 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import random
 import sys
 import tempfile
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'host'))
 import prepare_painter_clip as clip
 
+def reference_convert(rgb):
+    """최적화 이전의 픽셀별 기준 구현. 캐시/후처리를 사용하지 않는다."""
+    packed = bytearray(16000)
+    for i in range(64000):
+        r,g,b = rgb[i*3:i*3+3]
+        gray = ((77*r + 150*g + 29*b) >> 8) >> 4
+        y,x = divmod(i,320)
+        if x < 69 and 194 <= y < 199 and (r,g,b) == (228,0,0):
+            gray = 15
+        elif x < 69 and 194 <= y < 199 and (r,g,b) == (184,0,0):
+            gray = 12
+        elif 1 <= gray <= 13:
+            gray += 1
+        packed[i//4] |= (3-(gray+2)//5) << (6-2*(i%4))
+    return bytes(packed)
+
 class ClipTests(unittest.TestCase):
+    def test_reference_colors_and_spatial_overrides(self):
+        rgb = bytearray(random.Random(716).randbytes(192000))
+        # 같은 색이 보정 영역 안팎·같은 패킹 바이트에 섞여도 일치해야 한다.
+        for y in (0,193,194,195,198,199):
+            for x in range(73):
+                i = y*320+x
+                rgb[i*3:i*3+3] = bytes((228 if x%2 else 184,0,0))
+        self.assertEqual(clip.convert(rgb), reference_convert(rgb))
+        self.assertEqual(clip.convert(memoryview(rgb)), reference_convert(rgb))
+
+    def test_rgb_axes_and_frame_cache_isolation(self):
+        colors = [(v,0,0) for v in range(256)] + [(0,v,0) for v in range(256)]
+        colors += [(0,0,v) for v in range(256)] + [(v,v,v) for v in range(256)]
+        rgb = (bytes(c for color in colors for c in color)*63)[:192000]
+        for source in (rgb, bytes(reversed(rgb)), rgb):
+            self.assertEqual(clip.convert(source), reference_convert(source))
+
     def test_endpoints(self):
         self.assertEqual(clip.convert(bytes(192000)),b'\xff'*16000)
         self.assertEqual(clip.convert(b'\xff'*192000),bytes(16000))

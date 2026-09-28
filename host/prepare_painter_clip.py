@@ -14,20 +14,37 @@ PACKED_BYTES = WIDTH * HEIGHT // 4
 def convert(rgb):
     if len(rgb) != WIDTH * HEIGHT * 3:
         raise ValueError('RGB 길이는 320×200×3이어야 합니다')
+    rgb = bytes(rgb)
     packed = bytearray(PACKED_BYTES)
-    for i in range(WIDTH * HEIGHT):
-        r, g, b = rgb[i*3:i*3+3]
-        gray = ((77*r + 150*g + 29*b) >> 8) >> 4
-        y, x = divmod(i, WIDTH)
-        if x < 69 and 194 <= y < 199 and (r,g,b) == (228,0,0):
-            gray = 15
-        elif x < 69 and 194 <= y < 199 and (r,g,b) == (184,0,0):
-            gray = 12
-        elif 1 <= gray <= 13:
-            gray += 1
-        # 기존 16단계 밝기를 가장 가까운 4단계로 양자화. 드라이버는 흰색=0.
-        level = 3 - (gray + 2) // 5
-        packed[i//4] |= level << (6 - 2*(i%4))
+    # 게임의 반복되는 가로 4픽셀을 한 번만 변환한다. 캐시는 프레임 내에서만
+    # 유지되어 다른 장면으로 넘어가도 누적되지 않으며 최대16000개다.
+    blocks = {}
+    for i in range(PACKED_BYTES):
+        block = rgb[i*12:i*12+12]
+        value = blocks.get(block)
+        if value is None:
+            value = 0
+            for offset in (0, 3, 6, 9):
+                r, g, b = block[offset:offset+3]
+                gray = (77*r + 150*g + 29*b) >> 12
+                if 1 <= gray <= 13:
+                    gray += 1
+                value = (value << 2) | (3 - (gray + 2) // 5)
+            blocks[block] = value
+        packed[i] = value
+    # 위치에 의존하는 생명력 보정은 일반 색 캐시와 분리한다.
+    for y in range(194, 199):
+        for x in range(69):
+            i = y * WIDTH + x
+            color = rgb[i*3:i*3+3]
+            if color == b'\xe4\x00\x00':
+                level = 0
+            elif color == b'\xb8\x00\x00':
+                level = 1
+            else:
+                continue
+            shift = 6 - 2 * (i % 4)
+            packed[i//4] = (packed[i//4] & ~(3 << shift)) | (level << shift)
     return bytes(packed)
 
 
