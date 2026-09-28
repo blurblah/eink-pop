@@ -10,6 +10,10 @@ CRC는 실제 전송한 헤더와 압축 본문을 검증한다. 보드는 CRC �
 
 반복 비교 명령은 `host/painter_usb.py --replay-capture <캡처 디렉터리> --start-sequence 40 --frames 12 --port <조회한 포트> --log-prefix <새 경로>`다. 최신 게임은 기존 `--frame-path`를 쓴다. 재생 모드는 기록에 `captured_replay`로 표시하며 실시간 최신 선택/입력 지연과 구분한다.
 
+## 선택적 내부 시간 진단
+
+5회차 진단 빌드는 `EPD_PAINTER_CAPTURE_TIMING`과 `PAINTER_USB_DIAGNOSTICS`를 함께 지정한다. 기본 빌드에서는 계측 루프가 컴파일에서 제외된다. READY의 `timing=0/1`을 엄격히 맞추며 진단 호스트는 `--timing-diagnostics`를 사용한다. 변경된 화면마다 ACK 전에 `PAINTER_USB_TIMING` 한 줄이 온다. 세션/프레임/완료cycle/주사수, 변경탐색·행주사·대기·중립화·전체 시간을 포함한다. driver printf를 켜지 않고, 완료 후 잠금으로 스냅샷을 읽어 앱의 Serial에서만 출력한다. 잘못된 순서·시간합계·paint보다 긴 내부 측정은 오류다. 진단의 시각 조회와 추가 로그에는 오버헤드가 있으므로 일반 빌드 속도와 구분한다.
+
 ## 목적과 기준
 
 NORMAL 압축 입력 v7은 같은12장 재생에서 완료 간격211ms였고, 사용자는 직전 NORMAL과 전반적으로 큰 차이를 느끼지 못했다. 따라서 같은 파형·밝기·2bpp 확대를 실시간 게임 입력에 연결한다. 드라이버는 `repos/EPD_Painter`의7544e2d, 게임은 `repos/SDLPoP`의53b2ff3이다. 기존 제조사 USB v3는 그대로 보존한다.
