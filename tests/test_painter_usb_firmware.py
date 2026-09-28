@@ -41,7 +41,9 @@ public:
  void setAutoShutdown(bool); void setIdleTimeout(int); void setQuality(Quality); void setPaintProfile(bool);
  bool begin(); bool setDirectTransitions(bool); void clearBuffers(); void clear();
  bool waitForIdle(uint32_t); bool powerOffWhenIdle(uint32_t); uint32_t paintsCompleted();
+ struct Rect {int16_t x,y,w,h;};
  void paintPacked(const uint8_t*,int);
+ bool paintPackedRegion(const uint8_t*,const Rect&);
  struct PaintTiming { uint32_t cycle=0,passes=0; int64_t discovery_us=0,rowloop_us=0,settle_us=0,neutral_us=0,total_us=0; };
  bool readPaintTiming(PaintTiming&);
 };
@@ -94,6 +96,13 @@ bool EPD_Painter::readPaintTiming(PaintTiming&t){
  assert(!busy);if(scenario=="timing_missing")return false;
  t.cycle=completed+(scenario=="timing_cycle");t.passes=19;t.discovery_us=10;
  t.rowloop_us=100000;t.settle_us=76000;t.neutral_us=1000;t.total_us=177020;return true;
+}
+bool EPD_Painter::paintPackedRegion(const uint8_t*p,const Rect&r){
+ if(scenario=="paint_region")return false;
+ static uint8_t desired[129600]={};
+ assert(r.x>=0&&r.y>=0&&r.w>0&&r.h>0&&r.x+r.w<=960&&r.y+r.h<=540&&!(r.x%4)&&!(r.w%4));
+ for(int y=r.y;y<r.y+r.h;++y)memcpy(desired+y*240+r.x/4,p+y*240+r.x/4,r.w/4);
+ paintPacked(desired,1);return true;
 }
 void EPD_Painter::paintPacked(const uint8_t*p,int repeat){
  assert(!busy&&clears==1&&offs==0&&repeat==1&&expected.size()==16000);
@@ -176,7 +185,7 @@ def main():
     cases=['normal','same','white','full','stop','stop_before','screen_timeout','slow_paint',
            'start_crc','frame_crc','old_version','limit','early','partial_timeout','session','sequence','length',
            'cpu','no_psram','small_psram','alloc','rx_buffer','rx_queue','rx_read','begin','direct',
-           'clear_timeout','paint_timeout','cycles','off','disconnect',
+           'clear_timeout','paint_timeout','paint_region','cycles','off','disconnect',
            'patch','patch_same','patch_first','patch_crc','patch_header','patch_zero','patch_long',
            'patch_row','patch_end','patch_truncated','patch_duplicate','patch_reverse','patch_size']
     with tempfile.TemporaryDirectory(prefix='painter-usb-qa-') as d:

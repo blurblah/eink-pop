@@ -87,7 +87,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=ddcab87 board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1"
+    Serial.println("PAINTER_USB_READY version=5 panel=untouched driver=afa69d8 board=H716 quality=NORMAL gray=4 direct=1 profile=0 packed=1"
 #ifdef PAINTER_USB_DIAGNOSTICS
                    " timing=1"
 #else
@@ -172,9 +172,10 @@ static void beginSession(uint32_t id)
     receiveWindow = esp_timer_get_time();
 }
 
-static void expandFrame()
+static EPD_Painter::Rect expandFrame()
 {
     uint8_t expanded[160];
+    int left = 80, right = -1, top = 200, bottom = -1;
     for (int y = 0; y < 200; ++y) {
         const uint8_t *next = incoming + y * 80;
         const uint8_t *prior = previous + y * 80;
@@ -182,6 +183,10 @@ static void expandFrame()
         int first = 0, last = 79;
         while (next[first] == prior[first]) ++first;
         while (next[last] == prior[last]) --last;
+        if (first < left) left = first;
+        if (last > right) right = last;
+        if (y < top) top = y;
+        bottom = y;
         uint8_t *row = canvas + (70 + y * 2) * 240 + 40;
         for (int x = first; x <= last; ++x) {
             const uint8_t b = next[x];
@@ -192,6 +197,9 @@ static void expandFrame()
         memcpy(row + first * 2, expanded + first * 2, count);
         memcpy(row + 240 + first * 2, expanded + first * 2, count);
     }
+    if (right < left) return {0, 0, 0, 0};
+    return {(int16_t)(160 + left * 8), (int16_t)(70 + top * 2),
+            (int16_t)((right - left + 1) * 8), (int16_t)((bottom - top + 1) * 2)};
 }
 
 static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, int64_t decodeUs)
@@ -224,11 +232,11 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
     if (changed) {
         if (!checkLimits()) return;
         const int64_t prepared = esp_timer_get_time();
-        expandFrame();
+        const EPD_Painter::Rect dirty = expandFrame();
         prepareUs = esp_timer_get_time() - prepared;
         const uint32_t before = panel.paintsCompleted();
         const int64_t painted = esp_timer_get_time();
-        panel.paintPacked(canvas, 1);
+        if (!panel.paintPackedRegion(canvas, dirty)) { fail("paint_region"); return; }
         if (!panel.waitForIdle(WAIT_MS)) { fail("paint_timeout"); return; }
         paintUs = esp_timer_get_time() - painted;
         cycles = panel.paintsCompleted() - before;

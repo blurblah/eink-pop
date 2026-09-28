@@ -28,7 +28,12 @@ struct EPD_Painter {
   int packed_row_bytes=16,sem=0;int* _paint_buffer_sem=&sem;
   uint8_t storage[64]={};uint8_t* packed_paintbuffer=storage;
   std::atomic<int> paintStage{0};
+  struct Rect {int16_t x,y,w,h;};
+  bool idle=true;
+  bool waitForIdle(uint32_t){return idle && paintStage==0;}
   void paintPacked(const uint8_t*,int);
+  bool paintPackedRegion(const uint8_t*,const Rect&);
+  void _submitPacked();
 };
 '''
 MAIN = r'''
@@ -53,14 +58,37 @@ int main(){
   }
   EPD_Painter d;d._grey16=true;takes=gives=ticks=0;
   d.paintPacked(nullptr,1);assert(!takes&&!gives&&!ticks&&d.paintStage==0);++cases;
-  printf("압축 제출 %d사례 통과\n",cases);
+  d._grey16=false;d._decision_direct=true;d._dir_loaded=0xffff;
+  release=[&]{submitted=d.paintStage;};tick=[&]{--d.paintStage;};
+  uint8_t input[64];for(int i=0;i<64;++i)input[i]=i+1;
+  for(int y=0;y<4;++y)for(int h=1;h<=4-y;++h)for(int x=0;x<64;x+=4)for(int w=4;w<=64-x;w+=4){
+    uint8_t expected[64];memcpy(expected,d.storage,64);
+    for(int r=y;r<y+h;++r)memcpy(expected+r*16+x/4,input+r*16+x/4,w/4);
+    takes=gives=ticks=0;d.paintStage=0;
+    assert(d.paintPackedRegion(input,{(int16_t)x,(int16_t)y,(int16_t)w,(int16_t)h}));
+    assert(submitted==1&&takes==1&&gives==1&&ticks==1&&!memcmp(expected,d.storage,64));
+    for(uint8_t &b:input)b^=0xff;++cases;
+  }
+  for(auto rect:std::vector<EPD_Painter::Rect>{{-4,0,4,1},{0,-1,4,1},{0,0,0,1},{0,0,4,0},
+      {0,0,-4,1},{0,0,4,-1},{1,0,4,1},{0,0,3,1},{64,0,4,1},{0,4,4,1},
+      {60,0,8,1},{0,3,4,2},{32764,0,32764,1},{0,32767,4,32767}}){
+    uint8_t before[64];memcpy(before,d.storage,64);takes=gives=ticks=0;d.paintStage=0;
+    assert(!d.paintPackedRegion(input,rect)&&!takes&&!gives&&!ticks&&!memcmp(before,d.storage,64));++cases;
+  }
+  for(int fault=0;fault<5;++fault){
+    uint8_t before[64];memcpy(before,d.storage,64);takes=gives=ticks=0;
+    d._grey16=fault==0;d.idle=fault!=1;d.packed_paintbuffer=fault==2?nullptr:d.storage;
+    d._paint_buffer_sem=fault==3?nullptr:&d.sem;
+    assert(!d.paintPackedRegion(fault==4?nullptr:input,{0,0,64,4})&&!takes&&!gives&&!ticks&&!memcmp(before,d.storage,64));++cases;
+  }
+  printf("압축 제출/부분복사 %d사례 통과\n",cases);
 }
 '''
 
 def main():
     source=(ROOT/'repos/EPD_Painter/src/EPD_Painter.cpp').read_text()
     with tempfile.TemporaryDirectory(prefix='painter-packed-') as d:
-        p=Path(d);(p/'check.cpp').write_text(PREFIX+definition(source,'paintPacked')+MAIN)
+        p=Path(d);(p/'check.cpp').write_text(PREFIX+''.join(definition(source,n) for n in ['paintPacked','paintPackedRegion','_submitPacked'])+MAIN)
         subprocess.run(['clang++','-std=c++17','-O2','-fsanitize=address,undefined',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
         subprocess.run([str(p/'check')],check=True,timeout=30)
 
