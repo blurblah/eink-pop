@@ -24,7 +24,7 @@ VERSION = 6
 PATCH = 4
 RLE = 5
 PIXEL_BYTES = 16000
-READY = dict(version='6', panel='untouched', driver='650a735', board='H716',
+READY = dict(version='6', panel='untouched', driver='ffeea2a', board='H716',
              quality='NORMAL', gray='4', direct='1', profile='0', packed='1', timing='0', rle='1')
 
 
@@ -82,18 +82,20 @@ def capture_reader(directory, start, count):
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
                 stop_requested=lambda: False, frame_reader=read_frame, after_done=10.0,
-                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False):
+                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0):
     if not 1 <= frames <= 12 or not 1 <= session <= 0xffffffff:
         raise TransferError('세션·프레임 범위 오류')
     if quality not in ('NORMAL','FAST'):raise TransferError('지원하지 않는 화질 모드')
     if white_pair not in (False,1,2):raise TransferError('흰색 복귀 시험은1~2쌍만 허용')
     if white_pair and quality != 'FAST':raise TransferError('흰색 복귀 시험은 FAST 전용')
+    if black_pair not in (0,2) or black_pair and quality != 'FAST':raise TransferError('검정 보정 시험은 FAST 2쌍만 허용')
     io = SerialIO(fd, raw_log, tx_log, metadata)
     expected_ready = {**READY,'timing':str(int(timing_diagnostics)),'quality':quality}
     if white_pair:expected_ready['white']='pair2' if white_pair==2 else 'pair'
+    if black_pair:expected_ready['black']='pair2'
     metadata.update(status='진행 중', started_at=stamp(), session=session, max_frames=frames,
                     protocol_version=VERSION, bpp=2, timing_diagnostics=timing_diagnostics, quality=quality,
-                    white_pair=white_pair, frames=[], start_packets_sent=0, stop_packets_sent=0)
+                    white_pair=white_pair, black_pair=black_pair, frames=[], start_packets_sent=0, stop_packets_sent=0)
     started = False
     deadline = time.monotonic() + 15
     count = applied = 0
@@ -261,10 +263,12 @@ def main(argv=None):
     parser.add_argument('--timing-diagnostics',action='store_true',help='시간 캡처 진단 앱에만 사용')
     parser.add_argument('--quality',choices=('NORMAL','FAST'),default='NORMAL',help='FAST는 별도 속도 진단 앱에만 사용')
     parser.add_argument('--white-pair',nargs='?',type=int,const=1,default=0,choices=(1,2),help='흰색 복귀 시험 강도1/2, 생략값1')
+    parser.add_argument('--black-pair',type=int,default=0,choices=(2,),help='검정 이력 차이 시험2쌍')
     parser.add_argument('--log-prefix',type=Path,required=True)
     args=parser.parse_args(argv)
     if not 1 <= args.frames <= 12: parser.error('--frames는1~12')
     if args.white_pair and args.quality != 'FAST':parser.error('--white-pair는 FAST 전용')
+    if args.black_pair and args.quality != 'FAST':parser.error('--black-pair는 FAST 전용')
     paths={k:Path(str(args.log_prefix)+suffix) for k,suffix in
            [('raw','-runtime.log'),('tx','-tx.bin'),('json','-observation.json'),('ppm','-first.ppm'),('pgm','-first.pgm')]}
     if any(p.exists() for p in paths.values()): parser.error('기존 로그·이미지를 덮어쓰거나 반복 실행하지 않습니다')
@@ -280,7 +284,7 @@ def main(argv=None):
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,
                         stop_requested=lambda:stop,frame_reader=reader,first_prefix=args.log_prefix,
-                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair)
+                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair)
         print('제한 전송 종료: '+metadata['status'])
         return 0
     except (OSError,ValueError,TransferError) as error:

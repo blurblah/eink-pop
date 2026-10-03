@@ -100,3 +100,7 @@ START1회·FRAME12개 각각의 wire CRC·본문 SHA-256·ACK 세션/순서/CRC�
 ## 최적화 후 FAST 속도 진단
 
 기본 빌드와 호스트는 NORMAL이다. `PAINTER_USB_FAST`로 빌드한 앱은 READY에 `quality=FAST`를 표시하며 호스트도 명시적 `--quality FAST`가 있어야 START를 보낸다. 모드 불일치는 시작 전에 거부한다. 분석기는 `meets_numeric_timing`과 NORMAL 기준 `meets_single_run_timing`을 구분한다. FAST가100ms를 넘더라도/밑돌더라도 NORMAL의 화질 목표를 달성한 것으로 판정하지 않는다. 이전 FAST의 잔상·흐릿함 관찰은 여전히 유효하며, 이번 회차의 속도와 NORMAL 복구 근거는 `성능-개선-반복.md`를 따른다.
+
+## 2026-10-04 선택적 검정 이력 보정 시험
+
+드라이버ffeea2a의 `EPD_PAINTER_FAST_BLACK_PAIR=2` 빌드는FAST/4명도/직접전이에서0→3만11단계로바꾼다. 호스트 `--quality FAST --white-pair 2 --black-pair 2`와READY `black=pair2`가일치해야한다. 다른빌드에는기본적으로적용되지않으며EPK1v6/픽셀/전송형식은그대로다. 이후분석은black_pair를기록하고기존구동과같은화질로묶지않는다. 순코드합은같지만광학동등성/잔상해결은아직미검증이다. 상세판정은성능개선반복27회를따른다.

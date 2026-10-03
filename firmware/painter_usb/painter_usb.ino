@@ -17,6 +17,12 @@
 #if defined(EPD_PAINTER_FAST_WHITE_PAIR) && !defined(PAINTER_USB_FAST)
 #error "흰색 복귀 시험은 FAST 빌드에만 허용합니다."
 #endif
+#if defined(EPD_PAINTER_FAST_BLACK_PAIR) && !defined(PAINTER_USB_FAST)
+#error "검정 보정 시험은 FAST 빌드에만 허용합니다."
+#endif
+#if defined(EPD_PAINTER_FAST_BLACK_PAIR) && EPD_PAINTER_FAST_BLACK_PAIR != 2
+#error "검정 보정 시험은2쌍으로 제한합니다."
+#endif
 static constexpr size_t SOURCE_BYTES = 16000, CANVAS_BYTES = 129600;
 static constexpr int64_t RX_LIMIT_US = 5000000, SCREEN_LIMIT_US = 30000000;
 static constexpr uint32_t WAIT_MS = 5000;
@@ -97,7 +103,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=6 panel=untouched driver=650a735 board=H716 quality=" PAINTER_USB_QUALITY_NAME " gray=4 direct=1 profile=0 packed=1"
+    Serial.println("PAINTER_USB_READY version=6 panel=untouched driver=ffeea2a board=H716 quality=" PAINTER_USB_QUALITY_NAME " gray=4 direct=1 profile=0 packed=1"
 #ifdef PAINTER_USB_DIAGNOSTICS
                    " timing=1"
 #else
@@ -107,6 +113,9 @@ static void ready()
                    " white=pair2"
 #elif defined(EPD_PAINTER_FAST_WHITE_PAIR)
                    " white=pair"
+#endif
+#ifdef EPD_PAINTER_FAST_BLACK_PAIR
+                   " black=pair2"
 #endif
                    " rle=1");
     lastReadyMs = millis();

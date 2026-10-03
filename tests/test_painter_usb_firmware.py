@@ -120,6 +120,11 @@ int main(int argc,char**argv){
  assert(begins==0&&clears==0&&paints==0);
  if(scenario!="rx_buffer")assert(Serial.output.find("quality=" PAINTER_USB_QUALITY_NAME)!=std::string::npos);
 #if defined(EPD_PAINTER_FAST_WHITE_PAIR) && EPD_PAINTER_FAST_WHITE_PAIR == 2
+#ifdef EPD_PAINTER_FAST_BLACK_PAIR
+ if(scenario!="rx_buffer")assert(Serial.output.find(" black=pair2")!=std::string::npos);
+#else
+ assert(Serial.output.find(" black=pair2")==std::string::npos);
+#endif
  if(scenario!="rx_buffer")assert(Serial.output.find(" white=pair2")!=std::string::npos);
 #elif defined(EPD_PAINTER_FAST_WHITE_PAIR)
  if(scenario!="rx_buffer")assert(Serial.output.find(" white=pair")!=std::string::npos);
@@ -260,9 +265,10 @@ def main():
             (p/(name+'_first.bin')).write_bytes(packet(5,1,data))
             (p/(name+'.expected')).write_bytes(raw)
         total=0
-        for fast,diagnostics,white_pair in ((False,False,False),(False,True,False),(True,False,False),(True,True,False),(True,False,True),(True,True,True),(True,False,2),(True,True,2)):
+        for fast,diagnostics,white_pair,black_pair in ((False,False,0,0),(False,True,0,0),(True,False,0,0),(True,True,0,0),(True,False,1,0),(True,True,1,0),(True,False,2,0),(True,True,2,0),(True,False,2,2),(True,True,2,2)):
             flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING'] if diagnostics else []
             if fast:flags.append('-DPAINTER_USB_FAST')
+            if black_pair:flags.append('-DEPD_PAINTER_FAST_BLACK_PAIR=2')
             if white_pair:flags.append(f'-DEPD_PAINTER_FAST_WHITE_PAIR={int(white_pair)}')
             subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',d,*flags,
                             f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'check')],check=True)

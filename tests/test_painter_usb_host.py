@@ -15,12 +15,13 @@ from painter_patch import decode as decode_patch
 from painter_rle import decode as decode_rle
 
 class Peer:
-    def __init__(self, fault='', stop=False, diagnostics=False, quality='NORMAL', white_pair=False):
+    def __init__(self, fault='', stop=False, diagnostics=False, quality='NORMAL', white_pair=False,black_pair=0):
         self.fault=fault; self.pending=bytearray(); self.queue=[]; self.sent=[]
         self.diagnostics=diagnostics
         self.acks=0;self.n=0;self.applied=0;self.total=2;self.previous=bytes(16000)
         ready=p.READY.copy()
         ready['timing']=str(int(diagnostics));ready['quality']=quality
+        if black_pair and fault!='black_missing' or fault=='black_unexpected':ready['black']='pair2'
         if white_pair and fault!='white_missing' or fault=='white_unexpected':ready['white']='pair2' if white_pair==2 else 'pair'
         if fault=='ready':ready['version']='3'
         if fault=='old_ready':ready['version']='5'
@@ -78,6 +79,15 @@ class Peer:
         return dict(bytes=len(wire),bytes_written=len(wire),send_started_monotonic=time.monotonic())
 
 class Tests(unittest.TestCase):
+    def test_black_trial_requires_exact_ready(self):
+        result,_,_=self.run_peer(quality='FAST',white_pair=2,black_pair=2)
+        self.assertEqual(result['black_pair'],2)
+        for fault,requested in [('black_missing',2),('black_unexpected',0)]:
+            with self.assertRaises(p.TransferError):self.run_peer(fault,quality='FAST',black_pair=requested)
+        for invalid in (1,3):
+            with self.assertRaises(p.TransferError):self.run_peer(quality='FAST',black_pair=invalid)
+        with self.assertRaises(p.TransferError):self.run_peer(black_pair=2)
+
     def test_captured_replay_integrity_and_order(self):
         with tempfile.TemporaryDirectory() as d:
             directory=Path(d); entries=[]
@@ -95,8 +105,8 @@ class Tests(unittest.TestCase):
             file=directory/'frame-0002.ppm'; file.write_bytes(file.read_bytes().replace(bytes([120])*3,bytes([119])*3,1))
             with self.assertRaises(p.TransferError):reader(None)
 
-    def run_peer(self,fault='',stop=False,same=False,diagnostics=False,quality='NORMAL',white_pair=False):
-        peer=Peer(fault,diagnostics=diagnostics,quality=quality,white_pair=white_pair);meta={};reads=[]
+    def run_peer(self,fault='',stop=False,same=False,diagnostics=False,quality='NORMAL',white_pair=False,black_pair=0):
+        peer=Peer(fault,diagnostics=diagnostics,quality=quality,white_pair=white_pair,black_pair=black_pair);meta={};reads=[]
         def reader(_):
             self.assertEqual(len(reads),peer.acks) # 완료 응답을 소비한 뒤에만 최신 파일 읽기
             seq=(4,9)[len(reads)];reads.append(seq)
@@ -105,7 +115,7 @@ class Tests(unittest.TestCase):
         with patch.object(p,'SerialIO',return_value=peer):
             result=p.run_session(-1,'unused',2,123,meta,frame_reader=reader,after_done=0,
                                  stop_requested=(lambda:bool(peer.sent)) if stop else (lambda:False),
-                                 timing_diagnostics=diagnostics,quality=quality,white_pair=white_pair)
+                                 timing_diagnostics=diagnostics,quality=quality,white_pair=white_pair,black_pair=black_pair)
         return result,peer,reads
     def test_white_trial_identity(self):
         result,_,_=self.run_peer(quality='FAST',white_pair=True)
