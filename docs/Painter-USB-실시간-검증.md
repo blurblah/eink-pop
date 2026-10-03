@@ -108,3 +108,5 @@ START1회·FRAME12개 각각의 wire CRC·본문 SHA-256·ACK 세션/순서/CRC�
 ## 같은 픽셀 C 변환기
 
 `python3 host/painter_native.py`로현재소스의변환기를프로젝트.local/native에빌드하고,호스트실행에 `--native-conversion`을추가한다. C컴파일러와Python표준ctypes만필요하다. RGB/생명력변환정수식과픽셀순서는기존Python과동일하다. 기본실행은기존Python경로이며네이티브옵션을지정했는데빌드/소스해시/ABI가맞지않으면포트를열기전에실패한다. C소스변경후에는다시빌드해야한다. 생성라이브러리는다른기기로복사해재사용하지않고그기기에서빌드한다. 실행로그의conversion_backend가native_c인지확인한다.
+
+후방참조 코덱 준비(30회): 네이티브 ABI2는 변환 C·코덱 C·공유 헤더의 해시를 함께 검사한다. `python3 host/painter_native.py`로 다시 빌드한다. 코덱의 상호 복원과 경계 검증은 통과했지만 이 시점의 EPK1 v6 전송/펌웨어는 아직 새 코덱을 사용하지 않는다.

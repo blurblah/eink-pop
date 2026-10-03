@@ -9,11 +9,16 @@ import sys
 import tempfile
 
 SOURCE = Path(__file__).with_name('painter_convert.c')
+SOURCES = (SOURCE, SOURCE.with_name('painter_lz.c'), SOURCE.parent.parent/'firmware/painter_usb/painter_lz.h')
 DEFAULT = SOURCE.parent.parent / '.local/native' / ('painter_convert.dylib' if sys.platform == 'darwin' else 'painter_convert.so')
 
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def source_digest():
+    return hashlib.sha256(b''.join(path.read_bytes() for path in SOURCES)).hexdigest()
 
 
 def build(output=DEFAULT):
@@ -22,9 +27,9 @@ def build(output=DEFAULT):
     with tempfile.TemporaryDirectory(dir=output.parent) as directory:
         binary = Path(directory) / output.name
         flags = ['-dynamiclib'] if sys.platform == 'darwin' else ['-shared', '-fPIC']
-        command = ['cc', '-std=c11', '-O2', *flags, str(SOURCE), '-o', str(binary)]
+        command = ['cc', '-std=c11', '-O2', *flags, str(SOURCE), str(SOURCES[1]), '-o', str(binary)]
         subprocess.run(command, check=True)
-        manifest = dict(abi=1, source_sha256=digest(SOURCE), binary_sha256=digest(binary), command=command)
+        manifest = dict(abi=2, source_sha256=source_digest(), binary_sha256=digest(binary), command=command)
         binary.replace(output)
         output.with_suffix(output.suffix + '.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
     return manifest
@@ -33,14 +38,14 @@ def build(output=DEFAULT):
 def load(output=DEFAULT):
     output = Path(output).resolve()
     manifest = json.loads(output.with_suffix(output.suffix + '.json').read_text())
-    if (not isinstance(manifest, dict) or manifest.get('abi') != 1
-            or digest(SOURCE) != manifest.get('source_sha256')
+    if (not isinstance(manifest, dict) or manifest.get('abi') != 2
+            or source_digest() != manifest.get('source_sha256')
             or digest(output) != manifest.get('binary_sha256')):
         raise ValueError('네이티브 변환기 원본/빌드 해시 불일치; 다시 빌드해야 합니다')
     library = ctypes.CDLL(str(output))
     library.painter_convert_abi.argtypes = []
     library.painter_convert_abi.restype = ctypes.c_int
-    if library.painter_convert_abi() != 1:
+    if library.painter_convert_abi() != 2:
         raise ValueError('네이티브 변환기 ABI 불일치')
     pointer = ctypes.POINTER(ctypes.c_uint8)
     library.painter_convert.argtypes = [pointer, ctypes.c_size_t, pointer, ctypes.c_size_t]
@@ -55,6 +60,30 @@ def load(output=DEFAULT):
         if library.painter_convert(source, len(source), result, len(result)) != 0:
             raise ValueError('네이티브 변환기 실패')
         return bytes(result)
+    for name in ('painter_lz_encode', 'painter_lz_decode'):
+        function = getattr(library, name)
+        function.argtypes = [pointer, ctypes.c_size_t, pointer, ctypes.c_size_t]
+        function.restype = ctypes.c_int
+
+    def encode(data):
+        data = bytes(data)
+        if len(data) != 16000: raise ValueError('2bpp 크기 오류')
+        source = (ctypes.c_uint8 * len(data)).from_buffer_copy(data)
+        result = (ctypes.c_uint8 * 16000)()
+        count = library.painter_lz_encode(source, len(source), result, len(result))
+        if not 0 <= count < 16000: raise ValueError('후방참조 인코더 실패')
+        return ctypes.string_at(result, count) if count else None
+
+    def decode(data):
+        data = bytes(data)
+        if not 0 < len(data) < 16000: raise ValueError('압축 크기 오류')
+        source = (ctypes.c_uint8 * len(data)).from_buffer_copy(data)
+        result = (ctypes.c_uint8 * 16000)()
+        if library.painter_lz_decode(source, len(source), result, len(result)):
+            raise ValueError('후방참조 디코더 실패')
+        return bytes(result)
+    convert.encode_lz = encode
+    convert.decode_lz = decode
     return convert
 
 

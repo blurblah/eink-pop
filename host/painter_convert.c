@@ -2,7 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-int painter_convert_abi(void) { return 1; }
+int painter_convert_abi(void) { return 2; }
 
 int painter_convert(const uint8_t *rgb, size_t rgb_size, uint8_t *out, size_t out_size)
 {
