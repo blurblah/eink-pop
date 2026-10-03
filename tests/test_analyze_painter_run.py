@@ -13,14 +13,17 @@ import painter_usb as p
 
 
 class Tests(unittest.TestCase):
-    def fixture(self,d,step=.1,same=False,version=5,patch=False,rle=False):
+    def fixture(self,d,step=.1,same=False,version=5,patch=False,rle=False,lz=False):
         prefix=Path(d)/'run';wire=p.packet(p.START,12,0,b'\x0c',version=version);frames=[];previous=bytes(16000)
         for i in range(12):
             payload=bytes([1 if same else i+1])*16000
             if patch:
                 payload=bytearray(previous);payload[i]=i+1;payload=bytes(payload)
             encoded=p.encode_rle(payload) if rle else (p.encode_patch(previous,payload) if patch and i else None)
-            blob=p.packet(p.RLE if rle else (p.PATCH if encoded is not None else p.FRAME),12,i+1,
+            if lz:
+                from painter_lz import encode as encode_lz
+                encoded=encode_lz(payload)
+            blob=p.packet(p.LZ if lz else p.RLE if rle else (p.PATCH if encoded is not None else p.FRAME),12,i+1,
                           encoded if encoded is not None else payload,version=version);wire+=blob
             previous=payload
             frames.append(dict(sequence=i+1,source_sequence=i+40,bitmap_sha256=hashlib.sha256(payload).hexdigest(),
@@ -49,6 +52,13 @@ class Tests(unittest.TestCase):
                 prefix,_=self.fixture(d,step=.09,version=version,patch=patch)
                 result=a.analyze(prefix);self.assertTrue(result['meets_single_run_timing'])
                 if patch:self.assertLess(result['wire_bytes'],17000)
+    def test_lz_v7_hashes(self):
+        with tempfile.TemporaryDirectory() as d:
+            prefix,_=self.fixture(d,step=.09,version=7,lz=True)
+            result=a.analyze(prefix)
+            self.assertTrue(result['verified_packet_crc'])
+            self.assertTrue(result['all_frames_changed'])
+
     def test_rle_v6_restored_hashes_and_timing(self):
         with tempfile.TemporaryDirectory() as d:
             prefix,_=self.fixture(d,step=.09,version=6,rle=True)

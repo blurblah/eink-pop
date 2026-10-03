@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""H716에 최신 게임 화면을 보내는 EPK1 v6 / 무손실 행 패치·RLE 전송."""
+"""H716에 최신 게임 화면을 보내는 EPK1 v7 / 무손실 행 패치·RLE 전송."""
 import argparse
 import hashlib
 import json
@@ -17,24 +17,27 @@ from prepare_painter_clip import convert, unpack
 from compare_captures import load_capture
 from painter_patch import encode as encode_patch
 from painter_rle import encode as encode_rle
+from painter_lz import encode as encode_lz
 from usb_frame import (HEADER, START, FRAME, STOP, SerialIO, TransferError,
                        ResponseTimeout, open_serial, fields_of, unsigned, exact, stamp)
 
-VERSION = 6
+VERSION = 7
 PATCH = 4
 RLE = 5
+LZ = 6
 PIXEL_BYTES = 16000
-READY = dict(version='6', panel='untouched', driver='ffeea2a', board='H716',
-             quality='NORMAL', gray='4', direct='1', profile='0', packed='1', timing='0', rle='1')
+READY = dict(version='7', panel='untouched', driver='ffeea2a', board='H716',
+             quality='NORMAL', gray='4', direct='1', profile='0', packed='1', timing='0', rle='1', lz='1')
 
 
 def packet(kind, session, sequence, payload=b'', version=VERSION):
     valid = (kind == START and sequence == 0 and len(payload) == 1 and 1 <= payload[0] <= 12
              or kind == FRAME and sequence > 0 and len(payload) == PIXEL_BYTES
              or version >= 5 and kind == PATCH and sequence > 1 and len(payload) < PIXEL_BYTES
-             or version == 6 and kind == RLE and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
+             or version >= 6 and kind == RLE and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
+             or version == 7 and kind == LZ and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
              or kind == STOP and sequence > 0 and not payload)
-    if version not in (4,5,6) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
+    if version not in (4,5,6,7) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
         raise TransferError('패킷 종류·세션·순서·길이 오류')
     body = HEADER.pack(b'EPK1', version, kind, 0, session, sequence, len(payload)) + payload
     return body + struct.pack('<I', zlib.crc32(body) & 0xffffffff)
@@ -82,7 +85,7 @@ def capture_reader(directory, start, count, converter=convert):
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
                 stop_requested=lambda: False, frame_reader=read_frame, after_done=10.0,
-                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0):
+                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0, lz_encoder=encode_lz):
     if not 1 <= frames <= 12 or not 1 <= session <= 0xffffffff:
         raise TransferError('세션·프레임 범위 오류')
     if quality not in ('NORMAL','FAST'):raise TransferError('지원하지 않는 화질 모드')
@@ -204,6 +207,10 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         compressed = encode_rle(payload)
         if compressed is not None and len(compressed) < (len(payload) if encoded is None else len(encoded)):
             kind, encoded = RLE, compressed
+        if (len(payload) if encoded is None else len(encoded)) > 4096:
+            compressed = lz_encoder(payload)
+            if compressed is not None and len(compressed) < (len(payload) if encoded is None else len(encoded)):
+                kind, encoded = LZ, compressed
         wire = packet(kind,session,count+1,payload if encoded is None else encoded)
         crc = struct.unpack('<I',wire[-4:])[0]
         info.update(sequence=count+1,crc=f'{crc:08x}',packet_type=kind,wire_payload_bytes=len(wire)-24)
@@ -291,7 +298,8 @@ def main(argv=None):
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,
                         stop_requested=lambda:stop,frame_reader=reader,first_prefix=args.log_prefix,
-                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair)
+                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair,
+                        lz_encoder=converter.encode_lz if args.native_conversion else encode_lz)
         print('제한 전송 종료: '+metadata['status'])
         return 0
     except (OSError,ValueError,TransferError) as error:

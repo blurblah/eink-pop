@@ -13,6 +13,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'host'))
 import painter_usb as p
 from painter_patch import decode as decode_patch
 from painter_rle import decode as decode_rle
+from painter_lz import decode as decode_lz
 
 class Peer:
     def __init__(self, fault='', stop=False, diagnostics=False, quality='NORMAL', white_pair=False,black_pair=0):
@@ -24,7 +25,9 @@ class Peer:
         if black_pair and fault!='black_missing' or fault=='black_unexpected':ready['black']='pair2'
         if white_pair and fault!='white_missing' or fault=='white_unexpected':ready['white']='pair2' if white_pair==2 else 'pair'
         if fault=='ready':ready['version']='3'
-        if fault=='old_ready':ready['version']='5'
+        if fault=='old_ready':ready['version']='6'
+        if fault=='lz_missing':ready.pop('lz')
+        if fault=='lz_disabled':ready['lz']='0'
         if fault=='rle_missing':ready.pop('rle')
         if fault=='rle_disabled':ready['rle']='0'
         self.emit('READY',ready)
@@ -39,7 +42,7 @@ class Peer:
     def write_all(self,wire,deadline):
         self.sent.append(wire)
         magic,version,kind,flags,session,seq,n=p.HEADER.unpack(wire[:20])
-        assert magic==b'EPK1' and version==6 and flags==0 and n==len(wire)-24
+        assert magic==b'EPK1' and version==7 and flags==0 and n==len(wire)-24
         assert zlib.crc32(wire[:-4])&0xffffffff==struct.unpack('<I',wire[-4:])[0]
         if kind==p.START:
             self.total=wire[20]
@@ -52,6 +55,7 @@ class Peer:
             self.n+=1;payload=wire[20:-4]
             if kind==p.PATCH:payload=decode_patch(self.previous,payload)
             elif kind==p.RLE:payload=decode_rle(payload)
+            elif kind==p.LZ:payload=decode_lz(payload)
             changed=payload!=self.previous
             v=dict(session=session,seq=seq,crc=f'{zlib.crc32(wire[:-4])&0xffffffff:08x}',result='applied' if self.n==1 or changed else 'unchanged',rx_us=100,decode_us=0,display_us=400,clear_us=100 if self.n==1 else 0,prepare_us=10 if changed else 0,paint_us=200 if changed else 0,cycles=int(changed),elapsed_us=self.n*400)
             self.applied+=self.n==1 or changed
@@ -79,6 +83,22 @@ class Peer:
         return dict(bytes=len(wire),bytes_written=len(wire),send_started_monotonic=time.monotonic())
 
 class Tests(unittest.TestCase):
+    def test_lz_transfer_and_version_identity(self):
+        payload=bytes(range(256))*62+bytes(range(128))
+        self.assertEqual(len(payload),16000)
+        peer=Peer();reads=[];meta={}
+        def reader(_):
+            reads.append(1)
+            return b'raw',payload,dict(source_sequence=len(reads))
+        with patch.object(p,'SerialIO',return_value=peer):
+            result=p.run_session(-1,'unused',2,123,meta,frame_reader=reader,after_done=0)
+        self.assertEqual(result['frames'][0]['packet_type'],p.LZ)
+        self.assertEqual(peer.previous,payload)
+        for fault in ('lz_missing','lz_disabled','old_ready'):
+            with self.assertRaises(p.TransferError):self.run_peer(fault)
+        for version in (4,5,6):
+            with self.assertRaises(p.TransferError):p.packet(p.LZ,123,1,b'abc',version=version)
+
     def test_black_trial_requires_exact_ready(self):
         result,_,_=self.run_peer(quality='FAST',white_pair=2,black_pair=2)
         self.assertEqual(result['black_pair'],2)
@@ -182,7 +202,7 @@ class Tests(unittest.TestCase):
     def test_wire(self):
         for kind,seq,payload in ((p.START,0,b'\x0c'),(p.FRAME,1,bytes(16000)),(p.RLE,1,p.encode_rle(bytes(16000))),(p.STOP,2,b'')):
             wire=p.packet(kind,123,seq,payload)
-            self.assertEqual(wire[:6],b'EPK1\x06'+bytes([kind]))
+            self.assertEqual(wire[:6],b'EPK1\x07'+bytes([kind]))
             self.assertEqual(struct.unpack('<I',wire[-4:])[0],zlib.crc32(wire[:-4])&0xffffffff)
         for args in ((p.FRAME,1,1,bytes(8000)),(p.START,1,0,b'\x0d'),(p.STOP,0,1,b'')):
             with self.assertRaises(p.TransferError):p.packet(*args)

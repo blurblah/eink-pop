@@ -8,9 +8,10 @@ from pathlib import Path
 import statistics
 import struct
 
-from painter_usb import HEADER, START, FRAME, PATCH, RLE, packet
+from painter_usb import HEADER, START, FRAME, PATCH, RLE, LZ, packet
 from painter_patch import decode as decode_patch
 from painter_rle import decode as decode_rle
+from painter_lz import decode as decode_lz
 
 
 def require(condition, message):
@@ -48,8 +49,9 @@ def analyze(prefix):
         kind,seq,payload,crc=p;ack=f['ack']
         if kind==PATCH:payload=decode_patch(previous,payload)
         elif kind==RLE:payload=decode_rle(payload)
+        elif kind==LZ:payload=decode_lz(payload)
         change=payload!=previous
-        require(kind in (FRAME,PATCH,RLE) and seq==i+1==f['sequence']==int(ack['seq']) and
+        require(kind in (FRAME,PATCH,RLE,LZ) and seq==i+1==f['sequence']==int(ack['seq']) and
                 int(ack['session'])==observation['session'] and
                 ack['crc']==f'{crc:08x}' and hashlib.sha256(payload).hexdigest()==f['bitmap_sha256'],
                 'FRAME/ACK/본문 해시 불일치')

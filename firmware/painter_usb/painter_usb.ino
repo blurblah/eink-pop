@@ -1,6 +1,7 @@
-// EPK1 v6 / 2bpp·무손실 행 패치·RLE. CRC 확인 전에는 패널을 초기화하지 않는다.
+// EPK1 v7 / 2bpp·무손실 행 패치·RLE. CRC 확인 전에는 패널을 초기화하지 않는다.
 // 수신 상태 머신은 firmware/usb_frame의 검증된 EPK1 구조를 사용한다.
 #include <Arduino.h>
+#include "painter_lz.h"
 #include <EPD_Painter.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -103,7 +104,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=6 panel=untouched driver=ffeea2a board=H716 quality=" PAINTER_USB_QUALITY_NAME " gray=4 direct=1 profile=0 packed=1"
+    Serial.println("PAINTER_USB_READY version=7 panel=untouched driver=ffeea2a board=H716 quality=" PAINTER_USB_QUALITY_NAME " gray=4 direct=1 profile=0 packed=1"
 #ifdef PAINTER_USB_DIAGNOSTICS
                    " timing=1"
 #else
@@ -117,7 +118,7 @@ static void ready()
 #ifdef EPD_PAINTER_FAST_BLACK_PAIR
                    " black=pair2"
 #endif
-                   " rle=1");
+                   " rle=1 lz=1");
     lastReadyMs = millis();
 }
 
@@ -138,7 +139,7 @@ static bool checkLimits()
 
 static bool validateHeader()
 {
-    if (memcmp(header, "EPK1", 4) != 0 || header[4] != 6 || header[6] || header[7]) {
+    if (memcmp(header, "EPK1", 4) != 0 || header[4] != 7 || header[6] || header[7]) {
         fail("header");
         return false;
     }
@@ -160,10 +161,10 @@ static bool validateHeader()
             fail("sequence");
             return false;
         }
-        if ((type != 2 && type != 3 && type != 4 && type != 5) ||
+        if ((type != 2 && type != 3 && type != 4 && type != 5 && type != 6) ||
             (type == 2 && payloadLength != SOURCE_BYTES) || (type == 3 && payloadLength != 0) ||
             (type == 4 && (frames == 0 || payloadLength >= SOURCE_BYTES)) ||
-            (type == 5 && (payloadLength == 0 || payloadLength >= SOURCE_BYTES))) {
+            ((type == 5 || type == 6) && (payloadLength == 0 || payloadLength >= SOURCE_BYTES))) {
             fail("frame_header");
             return false;
         }
@@ -349,7 +350,8 @@ static void completePacket()
     const int64_t decodeStart = esp_timer_get_time();
     if (type == 4 && !decodePatch()) { fail("patch"); return; }
     if (type == 5 && !decodeRle()) { fail("rle"); return; }
-    const int64_t decodeUs = (type == 4 || type == 5) ? esp_timer_get_time() - decodeStart : 0;
+    if (type == 6 && decode_painter_lz(encoded, payloadLength, incoming, SOURCE_BYTES) != 0) { fail("lz"); return; }
+    const int64_t decodeUs = (type == 4 || type == 5 || type == 6) ? esp_timer_get_time() - decodeStart : 0;
     resetPacket();
     if (type == 1) beginSession(id);
     else if (type == 3) finish("stop");
@@ -401,7 +403,7 @@ void loop()
             if (state == TERMINAL) return;
             if (headerUsed == sizeof(header) && !validateHeader()) return;
         } else if (payloadUsed < payloadLength) {
-            uint8_t *destination = state == WAIT_START ? &startPayload : ((header[5] == 4 || header[5] == 5) ? encoded : incoming);
+            uint8_t *destination = state == WAIT_START ? &startPayload : ((header[5] == 4 || header[5] == 5 || header[5] == 6) ? encoded : incoming);
             received = readChunk(destination + payloadUsed, payloadLength - payloadUsed, available);
             if (state == TERMINAL) return;
             runningCrc = updateCrc(runningCrc, destination + payloadUsed, received);
