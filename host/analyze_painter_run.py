@@ -103,7 +103,7 @@ def analyze(prefix):
     quality=observation.get('quality','NORMAL') # 옵션 도입 전 v4/v5 호스트는 NORMAL 전용이었다.
     require(quality in ('NORMAL','FAST'),'알 수 없는 화질 모드')
     numeric=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125
-    return dict(input_mode=observation.get('input_mode','latest_file'),quality=quality,frames=len(frames),
+    return dict(input_mode=observation.get('input_mode','latest_file'),quality=quality,white_pair=bool(observation.get('white_pair')),frames=len(frames),
                 source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),
                 first_display_ms=int(frames[0]['ack']['display_us'])/1000,
                 ack_interval_ms=gap,software_completion_hz=1000/gap['mean'],

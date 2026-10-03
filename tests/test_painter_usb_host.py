@@ -14,12 +14,13 @@ import painter_usb as p
 from painter_patch import decode as decode_patch
 
 class Peer:
-    def __init__(self, fault='', stop=False, diagnostics=False, quality='NORMAL'):
+    def __init__(self, fault='', stop=False, diagnostics=False, quality='NORMAL', white_pair=False):
         self.fault=fault; self.pending=bytearray(); self.queue=[]; self.sent=[]
         self.diagnostics=diagnostics
         self.acks=0;self.n=0;self.applied=0;self.total=2;self.previous=bytes(16000)
         ready=p.READY.copy()
         ready['timing']=str(int(diagnostics));ready['quality']=quality
+        if white_pair and fault!='white_missing' or fault=='white_unexpected':ready['white']='pair'
         if fault=='ready':ready['version']='3'
         self.emit('READY',ready)
     def emit(self,marker,v):self.queue.append('PAINTER_USB_'+marker+' '+' '.join(f'{k}={x}' for k,x in v.items()))
@@ -89,8 +90,8 @@ class Tests(unittest.TestCase):
             file=directory/'frame-0002.ppm'; file.write_bytes(file.read_bytes().replace(bytes([120])*3,bytes([119])*3,1))
             with self.assertRaises(p.TransferError):reader(None)
 
-    def run_peer(self,fault='',stop=False,same=False,diagnostics=False,quality='NORMAL'):
-        peer=Peer(fault,diagnostics=diagnostics,quality=quality);meta={};reads=[]
+    def run_peer(self,fault='',stop=False,same=False,diagnostics=False,quality='NORMAL',white_pair=False):
+        peer=Peer(fault,diagnostics=diagnostics,quality=quality,white_pair=white_pair);meta={};reads=[]
         def reader(_):
             self.assertEqual(len(reads),peer.acks) # 완료 응답을 소비한 뒤에만 최신 파일 읽기
             seq=(4,9)[len(reads)];reads.append(seq)
@@ -99,8 +100,15 @@ class Tests(unittest.TestCase):
         with patch.object(p,'SerialIO',return_value=peer):
             result=p.run_session(-1,'unused',2,123,meta,frame_reader=reader,after_done=0,
                                  stop_requested=(lambda:bool(peer.sent)) if stop else (lambda:False),
-                                 timing_diagnostics=diagnostics,quality=quality)
+                                 timing_diagnostics=diagnostics,quality=quality,white_pair=white_pair)
         return result,peer,reads
+    def test_white_trial_identity(self):
+        result,_,_=self.run_peer(quality='FAST',white_pair=True)
+        self.assertTrue(result['white_pair'])
+        for fault,requested in [('white_missing',True),('white_unexpected',False)]:
+            with self.assertRaises(p.TransferError):
+                self.run_peer(fault,quality='FAST',white_pair=requested)
+        with self.assertRaises(p.TransferError):self.run_peer(white_pair=True)
     def test_latest_after_ack(self):
         r,peer,reads=self.run_peer();self.assertEqual(reads,[4,9]);self.assertEqual(r['status'],'통과')
         self.assertEqual(len(peer.sent),3);self.assertEqual(r['done']['frames'],'2')

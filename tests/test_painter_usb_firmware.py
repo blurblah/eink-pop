@@ -119,6 +119,11 @@ int main(int argc,char**argv){
  assert(argc==3);scenario=argv[1];std::string dir=argv[2];setup();
  assert(begins==0&&clears==0&&paints==0);
  if(scenario!="rx_buffer")assert(Serial.output.find("quality=" PAINTER_USB_QUALITY_NAME)!=std::string::npos);
+#ifdef EPD_PAINTER_FAST_WHITE_PAIR
+ if(scenario!="rx_buffer")assert(Serial.output.find(" white=pair")!=std::string::npos);
+#else
+ assert(Serial.output.find(" white=pair")==std::string::npos);
+#endif
  const uint8_t known[]="123456789";assert((updateCrc(0xffffffff,known,9)^0xffffffff)==0xcbf43926);
  // 전 바이트 값·임의 초기 상태·모든 분할점에서 독립 비트 구현과 비교.
  uint8_t data[256];for(int i=0;i<256;++i)data[i]=i;
@@ -219,9 +224,10 @@ def main():
             (p/(name+'.bin')).write_bytes(wire)
             (p/(name+'.expected')).write_bytes(target if name=='patch' else a)
         total=0
-        for fast,diagnostics in ((False,False),(False,True),(True,False),(True,True)):
+        for fast,diagnostics,white_pair in ((False,False,False),(False,True,False),(True,False,False),(True,True,False),(True,False,True),(True,True,True)):
             flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING'] if diagnostics else []
             if fast:flags.append('-DPAINTER_USB_FAST')
+            if white_pair:flags.append('-DEPD_PAINTER_FAST_WHITE_PAIR')
             subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-g','-I',d,*flags,
                             f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
             selected=cases+(['timing_missing','timing_cycle'] if diagnostics else [])
