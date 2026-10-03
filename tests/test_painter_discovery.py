@@ -59,15 +59,26 @@ int main(int argc,char**argv){
  for(unsigned mask=0;mask<64;++mask){
    uint16_t loaded=0;int bit=0;
    for(int from=1;from<4;++from)for(int to=1;to<4;++to)if(from!=to){if(mask&(1U<<bit))loaded|=1U<<((from<<2)|to);++bit;}
-   for(int width:{64,960}) {
+   for(int width:{64,960})for(bool repeated:{false,true}) {
      EPD_Painter a(width,8,loaded);ReferencePainter b(width,8,loaded);
      for(size_t i=0;i<a.pb.size();++i){a.pb[i]=rng();a.sb[i]=rng();if(i%32<16)a.sb[i]=a.pb[i];}
+     if(repeated){
+       const int bytes=width/4;
+       // 3행/2행 반복, 목표만 같음, 이전 상태만 같음을 함께 검증한다.
+       for(int row:{1,2,4}){
+         const int source=row==4?3:0;
+         memcpy(a.pb.data()+row*bytes,a.pb.data()+source*bytes,bytes);
+         memcpy(a.sb.data()+row*bytes,a.sb.data()+source*bytes,bytes);
+       }
+       memcpy(a.pb.data()+6*bytes,a.pb.data()+5*bytes,bytes);
+       memcpy(a.sb.data()+7*bytes,a.sb.data()+6*bytes,bytes);
+     }
      std::copy(a.pb.begin(),a.pb.end(),b.pb.begin());std::copy(a.sb.begin(),a.sb.end(),b.sb.begin());
      for(int cycle=0;cycle<3;++cycle){assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);++cases; if(mask==63){assert(a.pb==a.sb);if(cycle>0)assert(std::all_of(a.counts.begin(),a.counts.end(),[](uint8_t n){return n==0;}));}}
    }
  }
- for(int from=0;from<4;++from)for(int to=0;to<4;++to){
-   EPD_Painter a(960,2,0xffff);ReferencePainter b(960,2,0xffff);
+ for(int from=0;from<4;++from)for(int to=0;to<4;++to)for(int height:{1,2,3}){
+   EPD_Painter a(960,height,0xffff);ReferencePainter b(960,height,0xffff);
    std::fill(a.pb.begin(),a.pb.end(),to*0x55);std::fill(a.sb.begin(),a.sb.end(),from*0x55);
    std::copy(a.pb.begin(),a.pb.end(),b.pb.begin());std::copy(a.sb.begin(),a.sb.end(),b.sb.begin());
    assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);++cases;
