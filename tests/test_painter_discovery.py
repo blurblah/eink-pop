@@ -83,6 +83,15 @@ int main(int argc,char**argv){
    std::copy(a.pb.begin(),a.pb.end(),b.pb.begin());std::copy(a.sb.begin(),a.sb.end(),b.sb.begin());
    assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);++cases;
  }
+ // 인접 픽셀 묶음 최적화를 모든 이전/목표 바이트로 대조한다.
+ {
+   EPD_Painter a(64,3,0xffff);ReferencePainter b(64,3,0xffff);
+   for(int old=0;old<256;++old)for(int next=0;next<256;++next){
+     std::fill(a.pb.begin(),a.pb.end(),next);std::fill(a.sb.begin(),a.sb.end(),old);
+     std::copy(a.pb.begin(),a.pb.end(),b.pb.begin());std::copy(a.sb.begin(),a.sb.end(),b.sb.begin());
+     assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);++cases;
+   }
+ }
  // 기존 게임12장(2배 확대·흰 여백), 이전 화면 상태를 보존하여 연속 비교.
  EPD_Painter a(960,540,0xffff);ReferencePainter b(960,540,0xffff);
  for(int arg=1;arg<argc;++arg){
