@@ -138,6 +138,7 @@ int main(int argc,char**argv){
  auto start=file(dir+"/start.bin");auto first=file(dir+"/first.bin");auto second=file(dir+"/second.bin");
  if(scenario=="start_crc")start.back()^=1;
 if(scenario=="old_version"){start[4]=4;crc(start);}
+ if(scenario=="old_version5"){start[4]=5;crc(start);}
  if(scenario=="limit"){start[20]=13;crc(start);}
  if(scenario=="early")start.insert(start.end(),first.begin(),first.end());
  if(scenario=="full"){start[20]=12;crc(start);}
@@ -152,7 +153,11 @@ if(scenario=="old_version"){start[4]=4;crc(start);}
   if(scenario=="length"){first[16]=0;crc(first);}
   if(scenario=="white")first=file(dir+"/white.bin");
   if(scenario=="patch_first")first=file(dir+"/patch_first.bin");
-  expected.assign(first.begin()+20,first.end()-4);feed(first);
+  expected.assign(first.begin()+20,first.end()-4);
+  if(scenario=="rle_first"||scenario=="rle_same"||scenario=="rle_white"||scenario=="rle_first_invalid"){
+    first=file(dir+"/"+scenario+"_first.bin");expected=file(dir+"/"+scenario+".expected");
+  }
+  feed(first);
   if(state!=TERMINAL){
    if(scenario=="stop")feed(file(dir+"/stop2.bin"));
    else if(scenario=="screen_timeout"){clockUs+=30000000;loop();}
@@ -160,17 +165,24 @@ if(scenario=="old_version"){start[4]=4;crc(start);}
     if(scenario=="same"||scenario=="white"){second=first;second[12]=2;crc(second);}
     expected.assign(second.begin()+20,second.end()-4);
     if(scenario.rfind("patch",0)==0){second=file(dir+"/"+scenario+".bin");expected=file(dir+"/"+scenario+".expected");}
+    if(scenario.rfind("rle",0)==0&&scenario!="rle_first"){
+      second=file(dir+"/"+scenario+".bin");expected=file(dir+"/"+scenario+".expected");
+    }
     feed(second);
     if(scenario=="full")for(int n=3;n<=12;++n){second[12]=n;crc(second);feed(second);}
    }
   }
  }
- bool ok=scenario=="patch"||scenario=="patch_same"||scenario=="normal"||scenario=="same"||scenario=="white"||scenario=="full"||scenario=="stop"||scenario=="stop_before"||scenario=="screen_timeout"||scenario=="slow_paint";
+ bool ok=scenario=="rle"||scenario=="rle_first"||scenario=="rle_same"||scenario=="rle_white"||scenario=="patch"||scenario=="patch_same"||scenario=="normal"||scenario=="same"||scenario=="white"||scenario=="full"||scenario=="stop"||scenario=="stop_before"||scenario=="screen_timeout"||scenario=="slow_paint";
  assert(state==TERMINAL);
  if(ok){assert(Serial.output.find("PAINTER_USB_ERROR")==std::string::npos);assert(Serial.output.find("PAINTER_USB_DONE")!=std::string::npos);assert(offs==(scenario=="stop_before"?0:1));assert(frees==4);}
  else {assert(Serial.output.find("PAINTER_USB_ERROR")!=std::string::npos);if(panelInitialized)assert(offs==1);if(scenario=="off")assert(Serial.output.find("PAINTER_USB_DONE")==std::string::npos);}
  if(scenario=="patch")assert(paints==2&&frames==2);
  if(scenario=="patch_same")assert(paints==1&&frames==2);
+ if(scenario=="rle"||scenario=="rle_first")assert(paints==2&&frames==2);
+ if(scenario=="rle_same")assert(paints==1&&frames==2);
+ if(scenario=="rle_white")assert(paints==0&&clears==1&&frames==2);
+ if(scenario.rfind("rle",0)==0&&!ok)assert(paints==(scenario=="rle_first_invalid"?0:1));
  if(scenario.rfind("patch_",0)==0 && scenario!="patch_same")assert(paints==(scenario=="patch_first"?0:1));
  if(scenario=="normal")assert(paints==2&&frames==2&&applied==2);
  if(scenario=="same")assert(paints==1&&frames==2&&applied==1);
@@ -186,16 +198,18 @@ if(scenario=="old_version"){start[4]=4;crc(start);}
 '''
 
 def packet(kind,seq,payload):
-    body=struct.pack('<4sBBHIII',b'EPK1',5,kind,0,123,seq,len(payload))+payload
+    body=struct.pack('<4sBBHIII',b'EPK1',6,kind,0,123,seq,len(payload))+payload
     return body+struct.pack('<I',zlib.crc32(body)&0xffffffff)
 
 def main():
     cases=['normal','same','white','full','stop','stop_before','screen_timeout','slow_paint',
-           'start_crc','frame_crc','old_version','limit','early','partial_timeout','session','sequence','length',
+           'start_crc','frame_crc','old_version','old_version5','limit','early','partial_timeout','session','sequence','length',
            'cpu','no_psram','small_psram','alloc','rx_buffer','rx_queue','rx_read','begin','direct',
            'clear_timeout','paint_timeout','paint_region','cycles','off','disconnect',
            'patch','patch_same','patch_first','patch_crc','patch_header','patch_zero','patch_long',
-           'patch_row','patch_end','patch_truncated','patch_duplicate','patch_reverse','patch_size']
+           'patch_row','patch_end','patch_truncated','patch_duplicate','patch_reverse','patch_size',
+           'rle','rle_first','rle_same','rle_white','rle_first_invalid','rle_crc','rle_empty',
+           'rle_run','rle_literal','rle_short','rle_long','rle_trailing','rle_size']
     with tempfile.TemporaryDirectory(prefix='painter-usb-qa-') as d:
         p=Path(d);(p/'esp32s3').mkdir()
         for name,data in [('Arduino.h',ARDUINO),('EPD_Painter.h',EPD),('check.cpp',HARNESS),
@@ -225,6 +239,26 @@ def main():
             if name=='patch_crc':wire=wire[:-1]+bytes([wire[-1]^1])
             (p/(name+'.bin')).write_bytes(wire)
             (p/(name+'.expected')).write_bytes(target if name=='patch' else a)
+        # 실제 호스트 인코더와 독립된 원본 기대값으로 스케치 복원을 대조한다.
+        import sys
+        sys.path.insert(0,str(ROOT/'host'))
+        from painter_rle import encode
+        rle_target=bytes(range(128))+b'\x55'*(16000-128)
+        valid=encode(rle_target)
+        rles={'rle':valid,'rle_same':valid,'rle_white':encode(bytes(16000)),
+              'rle_crc':valid,'rle_empty':b'','rle_run':b'\xff','rle_literal':b'\x01x',
+              'rle_short':b'\x80x','rle_long':b'\xffx'*126,
+              'rle_trailing':valid+b'\x80x','rle_size':bytes(16000)}
+        for name,data in rles.items():
+            wire=packet(5,2,data)
+            if name=='rle_crc':wire=wire[:-1]+bytes([wire[-1]^1])
+            (p/(name+'.bin')).write_bytes(wire)
+            (p/(name+'.expected')).write_bytes(bytes(16000) if name=='rle_white' else rle_target)
+        for name in ('rle_first','rle_same','rle_white','rle_first_invalid'):
+            raw=bytes(16000) if name=='rle_white' else rle_target
+            data=b'\xff' if name=='rle_first_invalid' else encode(raw)
+            (p/(name+'_first.bin')).write_bytes(packet(5,1,data))
+            (p/(name+'.expected')).write_bytes(raw)
         total=0
         for fast,diagnostics,white_pair in ((False,False,False),(False,True,False),(True,False,False),(True,True,False),(True,False,True),(True,True,True),(True,False,2),(True,True,2)):
             flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING'] if diagnostics else []

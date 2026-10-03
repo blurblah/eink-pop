@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""H716 NORMAL에 최신 게임 화면을 보내는 EPK1 v5 / 무손실 행 패치 전송."""
+"""H716에 최신 게임 화면을 보내는 EPK1 v6 / 무손실 행 패치·RLE 전송."""
 import argparse
 import hashlib
 import json
@@ -16,22 +16,25 @@ import zlib
 from prepare_painter_clip import convert, unpack
 from compare_captures import load_capture
 from painter_patch import encode as encode_patch
+from painter_rle import encode as encode_rle
 from usb_frame import (HEADER, START, FRAME, STOP, SerialIO, TransferError,
                        ResponseTimeout, open_serial, fields_of, unsigned, exact, stamp)
 
-VERSION = 5
+VERSION = 6
 PATCH = 4
+RLE = 5
 PIXEL_BYTES = 16000
-READY = dict(version='5', panel='untouched', driver='7488d33', board='H716',
-             quality='NORMAL', gray='4', direct='1', profile='0', packed='1', timing='0')
+READY = dict(version='6', panel='untouched', driver='7488d33', board='H716',
+             quality='NORMAL', gray='4', direct='1', profile='0', packed='1', timing='0', rle='1')
 
 
 def packet(kind, session, sequence, payload=b'', version=VERSION):
     valid = (kind == START and sequence == 0 and len(payload) == 1 and 1 <= payload[0] <= 12
              or kind == FRAME and sequence > 0 and len(payload) == PIXEL_BYTES
-             or version == 5 and kind == PATCH and sequence > 1 and len(payload) < PIXEL_BYTES
+             or version >= 5 and kind == PATCH and sequence > 1 and len(payload) < PIXEL_BYTES
+             or version == 6 and kind == RLE and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
              or kind == STOP and sequence > 0 and not payload)
-    if version not in (4,5) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
+    if version not in (4,5,6) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
         raise TransferError('패킷 종류·세션·순서·길이 오류')
     body = HEADER.pack(b'EPK1', version, kind, 0, session, sequence, len(payload)) + payload
     return body + struct.pack('<I', zlib.crc32(body) & 0xffffffff)
@@ -196,6 +199,9 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         expected_changed = payload != previous_payload
         encoded = encode_patch(previous_payload,payload) if count else None
         kind = FRAME if encoded is None else PATCH
+        compressed = encode_rle(payload)
+        if compressed is not None and len(compressed) < (len(payload) if encoded is None else len(encoded)):
+            kind, encoded = RLE, compressed
         wire = packet(kind,session,count+1,payload if encoded is None else encoded)
         crc = struct.unpack('<I',wire[-4:])[0]
         info.update(sequence=count+1,crc=f'{crc:08x}',packet_type=kind,wire_payload_bytes=len(wire)-24)

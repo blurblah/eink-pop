@@ -12,6 +12,7 @@ import zlib
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'host'))
 import painter_usb as p
 from painter_patch import decode as decode_patch
+from painter_rle import decode as decode_rle
 
 class Peer:
     def __init__(self, fault='', stop=False, diagnostics=False, quality='NORMAL', white_pair=False):
@@ -22,6 +23,9 @@ class Peer:
         ready['timing']=str(int(diagnostics));ready['quality']=quality
         if white_pair and fault!='white_missing' or fault=='white_unexpected':ready['white']='pair2' if white_pair==2 else 'pair'
         if fault=='ready':ready['version']='3'
+        if fault=='old_ready':ready['version']='5'
+        if fault=='rle_missing':ready.pop('rle')
+        if fault=='rle_disabled':ready['rle']='0'
         self.emit('READY',ready)
     def emit(self,marker,v):self.queue.append('PAINTER_USB_'+marker+' '+' '.join(f'{k}={x}' for k,x in v.items()))
     def line(self,deadline):
@@ -34,7 +38,7 @@ class Peer:
     def write_all(self,wire,deadline):
         self.sent.append(wire)
         magic,version,kind,flags,session,seq,n=p.HEADER.unpack(wire[:20])
-        assert magic==b'EPK1' and version==5 and flags==0 and n==len(wire)-24
+        assert magic==b'EPK1' and version==6 and flags==0 and n==len(wire)-24
         assert zlib.crc32(wire[:-4])&0xffffffff==struct.unpack('<I',wire[-4:])[0]
         if kind==p.START:
             self.total=wire[20]
@@ -46,6 +50,7 @@ class Peer:
             assert self.acks==self.n
             self.n+=1;payload=wire[20:-4]
             if kind==p.PATCH:payload=decode_patch(self.previous,payload)
+            elif kind==p.RLE:payload=decode_rle(payload)
             changed=payload!=self.previous
             v=dict(session=session,seq=seq,crc=f'{zlib.crc32(wire[:-4])&0xffffffff:08x}',result='applied' if self.n==1 or changed else 'unchanged',rx_us=100,decode_us=0,display_us=400,clear_us=100 if self.n==1 else 0,prepare_us=10 if changed else 0,paint_us=200 if changed else 0,cycles=int(changed),elapsed_us=self.n*400)
             self.applied+=self.n==1 or changed
@@ -143,12 +148,12 @@ class Tests(unittest.TestCase):
             return b'raw',bytes(data),dict(source_sequence=reads)
         with patch.object(p,'SerialIO',return_value=peer):
             r=p.run_session(-1,'unused',2,123,{},frame_reader=reader,after_done=0)
-        self.assertEqual(peer.sent[1][5],p.FRAME);self.assertEqual(peer.sent[2][5],p.PATCH)
+        self.assertEqual(peer.sent[1][5],p.RLE);self.assertEqual(peer.sent[2][5],p.PATCH)
         self.assertEqual(len(peer.sent[2]),28);self.assertEqual(r['done']['applied'],'2')
     def test_stop_before_frame(self):
         r,peer,reads=self.run_peer(stop=True);self.assertEqual(reads,[]);self.assertEqual(r['done']['poweroff_returned'],'0')
     def test_failures(self):
-        for fault in ('ready','session','limit','crc','sequence','cycle','timing','initial_clear','repeat_clear','result','reboot','error','done_count','off','extra','partial'):
+        for fault in ('ready','old_ready','rle_missing','rle_disabled','session','limit','crc','sequence','cycle','timing','initial_clear','repeat_clear','result','reboot','error','done_count','off','extra','partial'):
             with self.subTest(fault=fault),self.assertRaises(p.TransferError):self.run_peer(fault)
     def test_source_reversal(self):
         peer=Peer();reads=0
@@ -165,12 +170,15 @@ class Tests(unittest.TestCase):
             r=p.run_session(-1,'unused',2,123,{},stop_requested=lambda:True)
         self.assertEqual(r['status'],'시작 전 취소');self.assertEqual(peer.sent,[])
     def test_wire(self):
-        for kind,seq,payload in ((p.START,0,b'\x0c'),(p.FRAME,1,bytes(16000)),(p.STOP,2,b'')):
+        for kind,seq,payload in ((p.START,0,b'\x0c'),(p.FRAME,1,bytes(16000)),(p.RLE,1,p.encode_rle(bytes(16000))),(p.STOP,2,b'')):
             wire=p.packet(kind,123,seq,payload)
-            self.assertEqual(wire[:6],b'EPK1\x05'+bytes([kind]))
+            self.assertEqual(wire[:6],b'EPK1\x06'+bytes([kind]))
             self.assertEqual(struct.unpack('<I',wire[-4:])[0],zlib.crc32(wire[:-4])&0xffffffff)
         for args in ((p.FRAME,1,1,bytes(8000)),(p.START,1,0,b'\x0d'),(p.STOP,0,1,b'')):
             with self.assertRaises(p.TransferError):p.packet(*args)
+        for payload in (b'',bytes(16000)):
+            with self.assertRaises(p.TransferError):p.packet(p.RLE,1,1,payload)
+        with self.assertRaises(p.TransferError):p.packet(p.RLE,1,1,b'\x80x',version=5)
     def test_ppm_same_conversion(self):
         with tempfile.TemporaryDirectory() as d:
             f=Path(d)/'frame.ppm';rgb=bytes(range(256))*750
