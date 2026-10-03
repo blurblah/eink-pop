@@ -40,7 +40,7 @@ def packet(kind, session, sequence, payload=b'', version=VERSION):
     return body + struct.pack('<I', zlib.crc32(body) & 0xffffffff)
 
 
-def read_frame(path):
+def read_frame(path, converter=convert):
     started = time.monotonic()
     try:
         with Path(path).open('rb') as source:
@@ -51,7 +51,7 @@ def read_frame(path):
     match = re.match(rb'P6\n# eink sequence ([1-9][0-9]{0,19})\n320 200\n255\n', raw)
     if not match or match.end() > 128 or len(raw) != match.end() + 192000:
         raise TransferError('PPM 헤더·해상도·길이 오류')
-    payload = convert(raw[match.end():])
+    payload = converter(raw[match.end():])
     return raw, payload, dict(source_sequence=int(match.group(1)),
         read_started_monotonic=started, read_finished_monotonic=time.monotonic(),
         file_mtime_ns=stat.st_mtime_ns, file_bytes=stat.st_size,
@@ -60,7 +60,7 @@ def read_frame(path):
         white=0, black=3, pixel_order='msb_first')
 
 
-def capture_reader(directory, start, count):
+def capture_reader(directory, start, count, converter=convert):
     """고정 입력 비교용. 검증된 캡처의 연속 번호를 ACK마다 한 장씩 읽는다."""
     frames = load_capture(directory)
     manifest = json.loads((Path(directory)/'capture.json').read_text())
@@ -72,7 +72,7 @@ def capture_reader(directory, start, count):
     def read(_):
         try: expected,entry = next(source)
         except StopIteration as error: raise TransferError('재생 입력 소진') from error
-        raw,payload,info = read_frame(Path(directory)/entry['file'])
+        raw,payload,info = read_frame(Path(directory)/entry['file'], converter)
         if info['source_sequence'] != expected['source_sequence'] or info['ppm_sha256'] != entry['sha256']:
             raise TransferError('재생 입력이 사전 검증 후 변경됨')
         info['captured_seconds'] = expected['seconds']
@@ -264,6 +264,7 @@ def main(argv=None):
     parser.add_argument('--quality',choices=('NORMAL','FAST'),default='NORMAL',help='FAST는 별도 속도 진단 앱에만 사용')
     parser.add_argument('--white-pair',nargs='?',type=int,const=1,default=0,choices=(1,2),help='흰색 복귀 시험 강도1/2, 생략값1')
     parser.add_argument('--black-pair',type=int,default=0,choices=(2,),help='검정 이력 차이 시험2쌍')
+    parser.add_argument('--native-conversion',action='store_true',help='검증된 동일 픽셀 C 변환기 사용')
     parser.add_argument('--log-prefix',type=Path,required=True)
     args=parser.parse_args(argv)
     if not 1 <= args.frames <= 12: parser.error('--frames는1~12')
@@ -279,7 +280,13 @@ def main(argv=None):
         stop=True
     previous_handler=signal.signal(signal.SIGINT,request_stop)
     try:
-        reader=capture_reader(args.replay_capture,args.start_sequence,args.frames) if args.replay_capture else read_frame
+        converter = convert
+        if args.native_conversion:
+            from painter_native import load
+            converter = load()
+        metadata['conversion_backend'] = 'native_c' if args.native_conversion else 'python'
+        reader = (capture_reader(args.replay_capture,args.start_sequence,args.frames,converter)
+                  if args.replay_capture else lambda path: read_frame(path,converter))
         with paths['raw'].open('xb') as raw,paths['tx'].open('xb') as tx:
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,

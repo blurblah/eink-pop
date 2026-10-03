@@ -104,3 +104,7 @@ START1회·FRAME12개 각각의 wire CRC·본문 SHA-256·ACK 세션/순서/CRC�
 ## 2026-10-04 선택적 검정 이력 보정 시험
 
 드라이버ffeea2a의 `EPD_PAINTER_FAST_BLACK_PAIR=2` 빌드는FAST/4명도/직접전이에서0→3만11단계로바꾼다. 호스트 `--quality FAST --white-pair 2 --black-pair 2`와READY `black=pair2`가일치해야한다. 다른빌드에는기본적으로적용되지않으며EPK1v6/픽셀/전송형식은그대로다. 이후분석은black_pair를기록하고기존구동과같은화질로묶지않는다. 순코드합은같지만광학동등성/잔상해결은아직미검증이다. 상세판정은성능개선반복27회를따른다.
+
+## 같은 픽셀 C 변환기
+
+`python3 host/painter_native.py`로현재소스의변환기를프로젝트.local/native에빌드하고,호스트실행에 `--native-conversion`을추가한다. C컴파일러와Python표준ctypes만필요하다. RGB/생명력변환정수식과픽셀순서는기존Python과동일하다. 기본실행은기존Python경로이며네이티브옵션을지정했는데빌드/소스해시/ABI가맞지않으면포트를열기전에실패한다. C소스변경후에는다시빌드해야한다. 생성라이브러리는다른기기로복사해재사용하지않고그기기에서빌드한다. 실행로그의conversion_backend가native_c인지확인한다.
