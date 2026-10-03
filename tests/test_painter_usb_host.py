@@ -20,7 +20,7 @@ class Peer:
         self.acks=0;self.n=0;self.applied=0;self.total=2;self.previous=bytes(16000)
         ready=p.READY.copy()
         ready['timing']=str(int(diagnostics));ready['quality']=quality
-        if white_pair and fault!='white_missing' or fault=='white_unexpected':ready['white']='pair'
+        if white_pair and fault!='white_missing' or fault=='white_unexpected':ready['white']='pair2' if white_pair==2 else 'pair'
         if fault=='ready':ready['version']='3'
         self.emit('READY',ready)
     def emit(self,marker,v):self.queue.append('PAINTER_USB_'+marker+' '+' '.join(f'{k}={x}' for k,x in v.items()))
@@ -105,6 +105,9 @@ class Tests(unittest.TestCase):
     def test_white_trial_identity(self):
         result,_,_=self.run_peer(quality='FAST',white_pair=True)
         self.assertTrue(result['white_pair'])
+        result,_,_=self.run_peer(quality='FAST',white_pair=2)
+        self.assertEqual(result['white_pair'],2)
+        with self.assertRaises(p.TransferError):self.run_peer(quality='FAST',white_pair=3)
         for fault,requested in [('white_missing',True),('white_unexpected',False)]:
             with self.assertRaises(p.TransferError):
                 self.run_peer(fault,quality='FAST',white_pair=requested)

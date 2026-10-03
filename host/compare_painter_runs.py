@@ -17,7 +17,7 @@ def compare(prefixes):
         result=analyze(prefix)
         observation=json.loads(Path(str(prefix)+'-observation.json').read_text())
         identity=tuple((f['source_sequence'],f['bitmap_sha256']) for f in observation['frames'])
-        key=(result['quality'],result['input_mode'],bool(observation.get('timing_diagnostics')),bool(observation.get('white_pair')),identity)
+        key=(result['quality'],result['input_mode'],bool(observation.get('timing_diagnostics')),int(observation.get('white_pair',0)),identity)
         try:label=str(prefix.parent.relative_to(ROOT/'artifacts/performance-loop-20260929'))
         except ValueError:label=str(prefix.parent.relative_to(ROOT))
         groups.setdefault(key,[]).append((label,prefix,result))
@@ -33,7 +33,7 @@ def markdown(groups):
            '동일 픽셀·모드 그룹 자체가 동일 광학 품질을 보증하지는 않는다.','']
     for number,(key,runs) in enumerate(groups.items(),1):
         quality,mode,diagnostic,white_pair,identity=key
-        lines += [f'## 그룹 {number}: {quality} / {mode} / 흰색 보정 {"시험" if white_pair else "기본"} / 내부 계측 {"켜짐" if diagnostic else "꺼짐"}',
+        lines += [f'## 그룹 {number}: {quality} / {mode} / 흰색 보정 {str(white_pair)+"쌍 시험" if white_pair else "기본"} / 내부 계측 {"켜짐" if diagnostic else "꺼짐"}',
                   '',f'원본 번호: {", ".join(str(seq) for seq,_ in identity)}. 초기화 이후11개 간격, p95는 nearest-rank다.','',
                   '| 실행 | 완료 평균 ms | p95 ms | 소프트웨어 장/초 | prepare ms | paint ms | 전송 바이트 | NORMAL 수치 기준 |',
                   '| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |']

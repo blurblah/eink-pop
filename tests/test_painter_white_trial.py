@@ -32,22 +32,23 @@ int net(const uint8_t* p,int n){int v=0;for(int i=0;i<n;++i)v+=(p[i]==1)-(p[i]==
 int main(){
  int cases=0;
  for(int mask=0;mask<8;++mask)for(int base:{7,8,9,11,12,19}){
-   const uint8_t* trains[32];uint8_t lengths[32];uint8_t storage[3][9];
+   const uint8_t* trains[32];uint8_t lengths[32];uint8_t storage[3][7 + 2 * EPD_PAINTER_FAST_WHITE_PAIR];
+   const int pairs=EPD_PAINTER_FAST_WHITE_PAIR, slots=7+2*pairs;
    memset(storage,0x5a,sizeof storage);
    uint32_t active=(1u<<2)|(1u<<6)|(1u<<27); // 어두워짐/회색 전이는 변경 금지
    for(int i=0;i<32;++i){trains[i]=&fast_darker[0][0];lengths[i]=7;}
    for(int g=1;g<=3;++g){trains[g*2+1]=fast_lighter[g-1];if(mask&(1<<(g-1)))active|=1u<<(g*2+1);}
    int result=bindFastWhiteTrial(&fast_lighter[0][0],active,trains,lengths,storage,base);
-   assert(result==(mask?std::max(base,9):base));
+   assert(result==(mask?std::max(base,slots):base));
    for(int i=0;i<32;++i){
      const int g=i/2;
      bool white=(i==3||i==5||i==7);
      bool changed=white && (mask&(1<<(g-1)));
      if(changed){
-       assert(lengths[i]==9&&trains[i][0]==1&&trains[i][8]==2);
-       assert(!memcmp(trains[i]+1,fast_lighter[g-1],7));
-       assert(net(trains[i],9)==net(fast_lighter[g-1],7));
-       assert(net(trains[i],9)+net(fast_darker[g-1],7)==0);
+       assert(lengths[i]==slots&&trains[i][0]==1&&trains[i][slots-1]==2);
+       assert(!memcmp(trains[i]+pairs,fast_lighter[g-1],7));
+       assert(net(trains[i],slots)==net(fast_lighter[g-1],7));
+       assert(net(trains[i],slots)+net(fast_darker[g-1],7)==0);
      }else{
        assert(lengths[i]==7);
        assert(trains[i]==(white?fast_lighter[g-1]:&fast_darker[0][0]));
@@ -61,9 +62,11 @@ int main(){
     with tempfile.TemporaryDirectory(prefix='painter-white-') as tmp:
         path = Path(tmp)
         (path / 'check.cpp').write_text(code)
-        subprocess.run(['clang++', '-std=c++17', '-fsanitize=address,undefined', '-g',
-                        str(path / 'check.cpp'), '-o', str(path / 'check')], check=True)
-        subprocess.run([str(path / 'check')], check=True, timeout=10)
+        for pairs in (1, 2):
+            subprocess.run(['clang++', '-std=c++17', '-fsanitize=address,undefined', '-g',
+                            f'-DEPD_PAINTER_FAST_WHITE_PAIR={pairs}',
+                            str(path / 'check.cpp'), '-o', str(path / 'check')], check=True)
+            subprocess.run([str(path / 'check')], check=True, timeout=10)
 
 
 if __name__ == '__main__':
