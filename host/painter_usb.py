@@ -24,7 +24,7 @@ VERSION = 6
 PATCH = 4
 RLE = 5
 PIXEL_BYTES = 16000
-READY = dict(version='6', panel='untouched', driver='7488d33', board='H716',
+READY = dict(version='6', panel='untouched', driver='650a735', board='H716',
              quality='NORMAL', gray='4', direct='1', profile='0', packed='1', timing='0', rle='1')
 
 

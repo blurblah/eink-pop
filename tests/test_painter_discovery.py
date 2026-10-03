@@ -92,6 +92,26 @@ int main(int argc,char**argv){
      assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);++cases;
    }
  }
+ // 반복 구간 경계와 이전/목표 중 한쪽만 같은 바이트를 모든 등록 조합에서 확인.
+ for(unsigned mask=0;mask<64;++mask){
+   uint16_t loaded=0;int bit=0;
+   for(int from=1;from<4;++from)for(int to=1;to<4;++to)if(from!=to){if(mask&(1U<<bit))loaded|=1U<<((from<<2)|to);++bit;}
+   for(int start=0;start<32;++start)for(int length:{1,2,15,16,17,32}){
+     EPD_Painter a(128,3,loaded);ReferencePainter b(128,3,loaded);
+     for(size_t i=0;i<a.pb.size();++i){a.pb[i]=rng();a.sb[i]=rng();}
+     for(int row=0;row<3;++row){
+       const uint8_t old=rng(),next=rng();
+       for(int x=start;x<std::min(32,start+length);++x){
+         a.pb[row*32+x]=next;a.sb[row*32+x]=old;
+         if(row==1&&x%3==0)a.pb[row*32+x]^=0x41;
+         if(row==2&&x%3==0)a.sb[row*32+x]^=0x14;
+       }
+     }
+     std::copy(a.pb.begin(),a.pb.end(),b.pb.begin());std::copy(a.sb.begin(),a.sb.end(),b.sb.begin());
+     for(int cycle=0;cycle<3;++cycle){assert(a._decision_discover_direct()==b._decision_discover_direct());compare(a,b);}
+     ++cases;
+   }
+ }
  // 기존 게임12장(2배 확대·흰 여백), 이전 화면 상태를 보존하여 연속 비교.
  EPD_Painter a(960,540,0xffff);ReferencePainter b(960,540,0xffff);
  for(int arg=1;arg<argc;++arg){
