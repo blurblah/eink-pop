@@ -142,8 +142,10 @@ def open_serial(port):
 class SerialIO:
     """동일 fd의 짧은 읽기/쓰기를 누적한다. 보드 재접속·재전송은 하지 않는다."""
 
-    def __init__(self, fd, raw_log, tx_log, metadata):
+    def __init__(self, fd, raw_log, tx_log, metadata, *, max_events=None, max_raw=None):
         self.fd, self.raw_log, self.tx_log, self.metadata = fd, raw_log, tx_log, metadata
+        self.max_events = MAX_EVENTS if max_events is None else max_events
+        self.max_raw = MAX_RAW if max_raw is None else max_raw
         self.pending = bytearray()
         self.raw_count = 0
 
@@ -187,7 +189,7 @@ class SerialIO:
                 except UnicodeDecodeError as error:
                     raise TransferError("ASCII가 아닌 제어 응답") from error
                 events = self.metadata.setdefault("responses", [])
-                if len(events) >= MAX_EVENTS:
+                if len(events) >= self.max_events:
                     raise TransferError("응답 로그 개수 상한 초과")
                 event = {"received_at": stamp(), "received_monotonic": time.monotonic(), "line": text}
                 events.append(event)
@@ -209,8 +211,8 @@ class SerialIO:
             if not data:
                 raise TransferError("직렬 연결 종료")
             self.raw_count += len(data)
-            if self.raw_count > MAX_RAW:
-                raise TransferError("수신 원본 로그 1MiB 상한 초과")
+            if self.raw_count > self.max_raw:
+                raise TransferError("수신 원본 로그 바이트 상한 초과")
             if self.raw_log is not None:
                 self.raw_log.write(data)
                 self.raw_log.flush()

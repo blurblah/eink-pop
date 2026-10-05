@@ -99,7 +99,9 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     if interactive and (play120 or not normal_direct13):raise TransferError('대화형 시험은 13주사2ms 전용이며 PLAY120과 함께 사용 불가')
     protocol = 8 if interactive else VERSION
     limit_seconds = 600 if interactive else 30
-    io = SerialIO(fd, raw_log, tx_log, metadata)
+    # 프레임당 TIMING/ACK 두 줄과 제어·주기 정리 여유. 세션은 여전히6000장 제한.
+    log_limits = dict(max_events=12128, max_raw=12128 * 514) if interactive else {}
+    io = SerialIO(fd, raw_log, tx_log, metadata, **log_limits)
     expected_ready = {**READY,'timing':str(int(timing_diagnostics)),'quality':quality}
     if white_pair:expected_ready['white']='pair2' if white_pair==2 else 'pair'
     if black_pair:expected_ready['black']='pair2'

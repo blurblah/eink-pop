@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'host'))
 import painter_usb as p
+import usb_frame as usb
 from test_painter_usb_host import Peer
 
 class InteractivePeer(Peer):
@@ -37,7 +38,10 @@ class Tests(unittest.TestCase):
    nonlocal reads
    reads+=1;data=bytes(16000) if peer.white and reads==2 else b'\x55'*16000
    return b'raw',data,dict(source_sequence=reads)
-  with patch.object(p,'SerialIO',return_value=peer):return p.run_session(-1,'unused',frames,123,{},frame_reader=reader,after_done=0,timing_diagnostics=True,normal_gap_2ms=True,normal_direct13=True,interactive=True,stop_requested=lambda:stop and peer.n==1)
+  with patch.object(p,'SerialIO',return_value=peer) as factory:
+   result=p.run_session(-1,'unused',frames,123,{},frame_reader=reader,after_done=0,timing_diagnostics=True,normal_gap_2ms=True,normal_direct13=True,interactive=True,stop_requested=lambda:stop and peer.n==1)
+  self.assertEqual(factory.call_args.kwargs,dict(max_events=12128,max_raw=12128*514))
+  return result
  def test_refresh_same_and_white(self):
   for white in (False,True):
    r=self.run_peer(InteractivePeer(refresh=True,white=white));self.assertEqual(r['done']['frames'],'2');self.assertEqual(r['done']['applied'],'2')
@@ -52,4 +56,25 @@ class Tests(unittest.TestCase):
   peer=Peer()
   with patch.object(p,'SerialIO',return_value=peer),self.assertRaises(p.TransferError):p.run_session(-1,'unused',6000,123,{},normal_gap_2ms=True,normal_direct13=True,interactive=True)
   self.assertEqual(peer.sent,[])
+
+class SerialLogBounds(unittest.TestCase):
+ def test_full_interactive_response_budget(self):
+  # 실제 SerialIO 읽기 경로로 기존 두 제한(4096줄/1MiB)을 모두 넘긴다.
+  data=(b'x'*200+b'\n')*12128
+  chunks=iter(data[i:i+1024] for i in range(0,len(data),1024))
+  meta={};io=usb.SerialIO(9,None,None,meta,max_events=12128,max_raw=12128*514)
+  with patch.object(usb.select,'select',return_value=([9],[],[])),patch.object(usb.os,'read',side_effect=lambda *_:next(chunks)):
+   for _ in range(12128):io.line(time.monotonic()+1)
+  self.assertGreater(io.raw_count,usb.MAX_RAW)
+  self.assertEqual(len(meta['responses']),12128)
+  io.pending.extend(b'overflow\n')
+  with self.assertRaisesRegex(usb.TransferError,'개수 상한'):io.line(time.monotonic()+1)
+ def test_default_and_raw_caps_remain(self):
+  io=usb.SerialIO(9,None,None,{'responses':[{}]*usb.MAX_EVENTS})
+  io.pending.extend(b'overflow\n')
+  with self.assertRaisesRegex(usb.TransferError,'개수 상한'):io.line(time.monotonic()+1)
+  io=usb.SerialIO(9,None,None,{},max_raw=4)
+  with patch.object(usb.select,'select',return_value=([9],[],[])),patch.object(usb.os,'read',return_value=b'12345'):
+   with self.assertRaisesRegex(usb.TransferError,'바이트 상한'):io.line(time.monotonic()+1)
+
 if __name__=='__main__':unittest.main()
