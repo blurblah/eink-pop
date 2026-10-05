@@ -17,7 +17,7 @@ class Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             prefix,obs=self.fixture(d,step=.09)
             path=Path(str(prefix)+'-observation.json')
-            for tone in ('skin_edge_v1','global_a_v1'):
+            for tone in ('skin_edge_v1','global_a_v1','shadow_v1'):
                 obs['tone']=tone;path.write_text(json.dumps(obs))
                 r=a.analyze(prefix);self.assertEqual(r['tone'],tone);self.assertFalse(r['meets_single_run_timing'])
             obs['tone']='unknown';path.write_text(json.dumps(obs))

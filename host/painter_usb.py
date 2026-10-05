@@ -281,6 +281,7 @@ def main(argv=None):
     parser.add_argument('--normal-direct13',action='store_true',help='NORMAL 2ms 직접 전이13주사 제한 시험 앱 전용')
     parser.add_argument('--play120',action='store_true',help='승인된 한 차례 실제 조작: 최대120장·30초 전용 앱')
     tone_options = parser.add_mutually_exclusive_group()
+    tone_options.add_argument('--shadow-tone',action='store_true',help='중간톤 유지·음영만 짙게 하는 후보')
     tone_options.add_argument('--global-tone',action='store_true',help='선택된 전체 명암 A 변환')
     tone_options.add_argument('--skin-contrast',action='store_true',help='피부/옷 명암 분리와 바닥 경계 보존 시험')
     parser.add_argument('--native-conversion',action='store_true',help='검증된 동일 픽셀 C 변환기 사용')
@@ -309,10 +310,14 @@ def main(argv=None):
         if args.global_tone:
             from prepare_painter_clip import convert_global
             converter = convert_global
+        if args.shadow_tone:
+            from prepare_painter_clip import convert_shadow
+            converter = convert_shadow
         metadata['tone'] = getattr(converter,'tone','baseline')
         if args.native_conversion:
             from painter_native import load
-            converter = (load(global_tone=True) if args.global_tone else
+            converter = (load(shadow_tone=True) if args.shadow_tone else
+                         load(global_tone=True) if args.global_tone else
                          load(skin_contrast=True) if args.skin_contrast else load())
         metadata['conversion_backend'] = 'native_c' if args.native_conversion else 'python'
         reader = (capture_reader(args.replay_capture,args.start_sequence,args.frames,converter)

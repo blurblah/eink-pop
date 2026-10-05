@@ -11,7 +11,7 @@ WIDTH, HEIGHT = 320, 200
 PACKED_BYTES = WIDTH * HEIGHT // 4
 
 
-def convert(rgb, *, global_tone=False):
+def convert(rgb, *, global_tone=False, shadow_tone=False):
     if len(rgb) != WIDTH * HEIGHT * 3:
         raise ValueError('RGB 길이는 320×200×3이어야 합니다')
     rgb = bytes(rgb)
@@ -26,9 +26,9 @@ def convert(rgb, *, global_tone=False):
             value = 0
             for offset in (0, 3, 6, 9):
                 r, g, b = block[offset:offset+3]
-                if global_tone:
+                if global_tone or shadow_tone:
                     gray = (77*r + 150*g + 29*b) >> 8
-                    level = 3 - (gray >= 43) - (gray >= 128) - (gray >= 213)
+                    level = 3 - (gray >= (60 if shadow_tone else 43)) - (gray >= 128) - (gray >= 213)
                 else:
                     gray = (77*r + 150*g + 29*b) >> 12
                     if 1 <= gray <= 13:
@@ -59,6 +59,13 @@ def convert_global(rgb):
 
 
 convert_global.tone = 'global_a_v1'
+
+def convert_shadow(rgb):
+    """A의 중간톤은 유지하고 암부 경계만 60으로 높인다."""
+    return convert(rgb, shadow_tone=True)
+
+
+convert_shadow.tone = 'shadow_v1'
 
 
 SKIN_COLORS = frozenset(((220,128,108), (216,184,160), (176,112,96)))

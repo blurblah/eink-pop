@@ -35,8 +35,8 @@ def build(output=DEFAULT):
     return manifest
 
 
-def load(output=DEFAULT, *, skin_contrast=False, global_tone=False):
-    if skin_contrast and global_tone:raise ValueError('피부 보정과 전체 톤은 동시 선택 불가')
+def load(output=DEFAULT, *, skin_contrast=False, global_tone=False, shadow_tone=False):
+    if sum(map(bool,(skin_contrast,global_tone,shadow_tone)))>1:raise ValueError('톤 프로파일은 동시 선택 불가')
     output = Path(output).resolve()
     manifest = json.loads(output.with_suffix(output.suffix + '.json').read_text())
     if (not isinstance(manifest, dict) or manifest.get('abi') != 2
@@ -49,7 +49,8 @@ def load(output=DEFAULT, *, skin_contrast=False, global_tone=False):
     if library.painter_convert_abi() != 2:
         raise ValueError('네이티브 변환기 ABI 불일치')
     pointer = ctypes.POINTER(ctypes.c_uint8)
-    convert_function = (library.painter_convert_global if global_tone else
+    convert_function = (library.painter_convert_shadow if shadow_tone else
+                        library.painter_convert_global if global_tone else
                         library.painter_convert_skin if skin_contrast else library.painter_convert)
     convert_function.argtypes = [pointer, ctypes.c_size_t, pointer, ctypes.c_size_t]
     convert_function.restype = ctypes.c_int
@@ -63,7 +64,7 @@ def load(output=DEFAULT, *, skin_contrast=False, global_tone=False):
         if convert_function(source, len(source), result, len(result)) != 0:
             raise ValueError('네이티브 변환기 실패')
         return bytes(result)
-    convert.tone = 'global_a_v1' if global_tone else 'skin_edge_v1' if skin_contrast else 'baseline'
+    convert.tone = 'shadow_v1' if shadow_tone else 'global_a_v1' if global_tone else 'skin_edge_v1' if skin_contrast else 'baseline'
     for name in ('painter_lz_encode', 'painter_lz_decode'):
         function = getattr(library, name)
         function.argtypes = [pointer, ctypes.c_size_t, pointer, ctypes.c_size_t]
