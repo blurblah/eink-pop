@@ -108,8 +108,10 @@ def analyze(prefix):
     require(quality in ('NORMAL','FAST'),'알 수 없는 화질 모드')
     gap_trial=bool(observation.get('normal_gap_2ms',False))
     require(not gap_trial or quality=='NORMAL','2ms 후보의 화질 모드 오류')
+    direct13=bool(observation.get('normal_direct13',False))
+    require(not direct13 or gap_trial,'13주사 후보의2ms 설정 누락')
     numeric=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125
-    return dict(input_mode=observation.get('input_mode','latest_file'),quality=quality,normal_gap_2ms=gap_trial,white_pair=int(observation.get('white_pair',0)),black_pair=int(observation.get('black_pair',0)),frames=len(frames),
+    return dict(input_mode=observation.get('input_mode','latest_file'),quality=quality,normal_gap_2ms=gap_trial,normal_direct13=direct13,white_pair=int(observation.get('white_pair',0)),black_pair=int(observation.get('black_pair',0)),frames=len(frames),
                 source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),
                 first_display_ms=int(frames[0]['ack']['display_us'])/1000,
                 ack_interval_ms=gap,software_completion_hz=1000/gap['mean'],

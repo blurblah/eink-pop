@@ -85,7 +85,7 @@ def capture_reader(directory, start, count, converter=convert):
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
                 stop_requested=lambda: False, frame_reader=read_frame, after_done=10.0,
-                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0, lz_encoder=encode_lz, normal_gap_2ms=False):
+                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0, lz_encoder=encode_lz, normal_gap_2ms=False, normal_direct13=False):
     if not 1 <= frames <= 12 or not 1 <= session <= 0xffffffff:
         raise TransferError('세션·프레임 범위 오류')
     if quality not in ('NORMAL','FAST'):raise TransferError('지원하지 않는 화질 모드')
@@ -93,14 +93,16 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     if white_pair and quality != 'FAST':raise TransferError('흰색 복귀 시험은 FAST 전용')
     if black_pair not in (0,2) or black_pair and quality != 'FAST':raise TransferError('검정 보정 시험은 FAST 2쌍만 허용')
     if normal_gap_2ms and quality != 'NORMAL':raise TransferError('2ms 간격 시험은 NORMAL 전용')
+    if normal_direct13 and not normal_gap_2ms:raise TransferError('13주사 시험은 NORMAL 2ms 설정 필요')
     io = SerialIO(fd, raw_log, tx_log, metadata)
     expected_ready = {**READY,'timing':str(int(timing_diagnostics)),'quality':quality}
     if white_pair:expected_ready['white']='pair2' if white_pair==2 else 'pair'
     if black_pair:expected_ready['black']='pair2'
     if normal_gap_2ms:expected_ready['normal_gap_us']='2000'
+    if normal_direct13:expected_ready['normal_direct']='13'
     metadata.update(status='진행 중', started_at=stamp(), session=session, max_frames=frames,
                     protocol_version=VERSION, bpp=2, timing_diagnostics=timing_diagnostics, quality=quality,
-                    white_pair=white_pair, black_pair=black_pair, normal_gap_2ms=normal_gap_2ms, frames=[], start_packets_sent=0, stop_packets_sent=0)
+                    white_pair=white_pair, black_pair=black_pair, normal_gap_2ms=normal_gap_2ms, normal_direct13=normal_direct13, frames=[], start_packets_sent=0, stop_packets_sent=0)
     started = False
     deadline = time.monotonic() + 15
     count = applied = 0
@@ -274,10 +276,12 @@ def main(argv=None):
     parser.add_argument('--white-pair',nargs='?',type=int,const=1,default=0,choices=(1,2),help='흰색 복귀 시험 강도1/2, 생략값1')
     parser.add_argument('--black-pair',type=int,default=0,choices=(2,),help='검정 이력 차이 시험2쌍')
     parser.add_argument('--normal-gap-2ms',action='store_true',help='NORMAL 2ms 간격 제한 시험 앱 전용')
+    parser.add_argument('--normal-direct13',action='store_true',help='NORMAL 2ms 직접 전이13주사 제한 시험 앱 전용')
     parser.add_argument('--native-conversion',action='store_true',help='검증된 동일 픽셀 C 변환기 사용')
     parser.add_argument('--log-prefix',type=Path,required=True)
     args=parser.parse_args(argv)
     if not 1 <= args.frames <= 12: parser.error('--frames는1~12')
+    if args.normal_direct13 and not args.normal_gap_2ms:parser.error('--normal-direct13은 --normal-gap-2ms 필요')
     if args.normal_gap_2ms and args.quality != 'NORMAL':parser.error('--normal-gap-2ms는 NORMAL 전용')
     if args.white_pair and args.quality != 'FAST':parser.error('--white-pair는 FAST 전용')
     if args.black_pair and args.quality != 'FAST':parser.error('--black-pair는 FAST 전용')
@@ -302,7 +306,7 @@ def main(argv=None):
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,
                         stop_requested=lambda:stop,frame_reader=reader,first_prefix=args.log_prefix,
-                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair,normal_gap_2ms=args.normal_gap_2ms,
+                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair,normal_gap_2ms=args.normal_gap_2ms,normal_direct13=args.normal_direct13,
                         lz_encoder=converter.encode_lz if args.native_conversion else encode_lz)
         print('제한 전송 종료: '+metadata['status'])
         return 0

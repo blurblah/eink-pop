@@ -36,7 +36,8 @@ EPD=r'''
 class EPD_Painter {
 public:
  enum class Quality {QUALITY_NORMAL,QUALITY_FAST};
- struct Config { int board=716, pass_gap_us_normal=4000; };
+ struct TrainTables { const uint8_t (*dir_normal)[4][26]=nullptr; };
+ struct Config { int board=716, pass_gap_us_normal=4000; TrainTables trains; };
  int gap; const Config* preset;
  explicit EPD_Painter(const Config& c):gap(c.pass_gap_us_normal),preset(&c) { if(c.board!=716)__builtin_trap(); }
  void setAutoShutdown(bool); void setIdleTimeout(int); void setQuality(Quality); void setPaintProfile(bool);
@@ -125,6 +126,14 @@ int main(int argc,char**argv){
  assert(panel.preset->pass_gap_us_normal==panel.gap);
 #ifdef PAINTER_USB_NORMAL_GAP_2MS
  assert(panel.gap==2000);
+#ifdef PAINTER_USB_NORMAL_DIRECT13
+ assert(panel.preset->trains.dir_normal==NORMAL_DIRECT13_TRIAL);
+ assert(EPD_LILYGO_EPD47_H716_PRESET.trains.dir_normal==nullptr);
+ if(scenario!="rx_buffer")assert(Serial.output.find("normal_direct=13")!=std::string::npos);
+#else
+ assert(panel.preset->trains.dir_normal==nullptr);
+ assert(Serial.output.find("normal_direct=")==std::string::npos);
+#endif
  if(scenario!="rx_buffer")assert(Serial.output.find("normal_gap_us=2000")!=std::string::npos);
 #else
  assert(panel.gap==4000);
@@ -307,8 +316,9 @@ def main():
             (p/(name+'_first.bin')).write_bytes(packet(6,1,data))
             (p/(name+'.expected')).write_bytes(raw)
         total=0
-        for fast,diagnostics,white_pair,black_pair,gap2 in ((False,False,0,0,False),(False,True,0,0,False),(True,False,0,0,False),(True,True,0,0,False),(True,False,1,0,False),(True,True,1,0,False),(True,False,2,0,False),(True,True,2,0,False),(True,False,2,2,False),(True,True,2,2,False),(False,False,0,0,True),(False,True,0,0,True)):
+        for fast,diagnostics,white_pair,black_pair,gap2,direct13 in ((False,False,0,0,False,False),(False,True,0,0,False,False),(True,False,0,0,False,False),(True,True,0,0,False,False),(True,False,1,0,False,False),(True,True,1,0,False,False),(True,False,2,0,False,False),(True,True,2,0,False,False),(True,False,2,2,False,False),(True,True,2,2,False,False),(False,False,0,0,True,False),(False,True,0,0,True,False),(False,False,0,0,True,True),(False,True,0,0,True,True)):
             flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING'] if diagnostics else []
+            if direct13:flags.append('-DPAINTER_USB_NORMAL_DIRECT13')
             if gap2:flags.append('-DPAINTER_USB_NORMAL_GAP_2MS')
             if fast:flags.append('-DPAINTER_USB_FAST')
             if black_pair:flags.append('-DEPD_PAINTER_FAST_BLACK_PAIR=2')
@@ -321,5 +331,8 @@ def main():
         invalid=subprocess.run(['clang++','-std=c++17','-I',d,'-DPAINTER_USB_FAST','-DPAINTER_USB_NORMAL_GAP_2MS',
                                 f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'invalid')],capture_output=True,text=True)
         assert invalid.returncode != 0 and '중간 속도 시험은 NORMAL 전용' in invalid.stderr
+        invalid=subprocess.run(['clang++','-std=c++17','-I',d,'-DPAINTER_USB_NORMAL_DIRECT13',
+                                f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'invalid')],capture_output=True,text=True)
+        assert invalid.returncode != 0 and '13주사 시험은 NORMAL 2ms 설정이 필요' in invalid.stderr
         print(f'실제 USB 스케치 NORMAL/FAST·일반/진단 {total}사례 통과')
 if __name__=='__main__':main()

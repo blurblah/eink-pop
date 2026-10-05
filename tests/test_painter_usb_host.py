@@ -137,6 +137,22 @@ class Tests(unittest.TestCase):
                                  stop_requested=(lambda:bool(peer.sent)) if stop else (lambda:False),
                                  timing_diagnostics=diagnostics,quality=quality,white_pair=white_pair,black_pair=black_pair)
         return result,peer,reads
+    def test_normal_direct13_identity(self):
+        for actual,requested in ((False,True),(True,False),(True,True)):
+            peer=Peer(stop=True);peer.queue[0]+=' normal_gap_us=2000'
+            if actual:peer.queue[0]+=' normal_direct=13'
+            with patch.object(p,'SerialIO',return_value=peer):
+                if actual!=requested:
+                    with self.assertRaises(p.TransferError):
+                        p.run_session(-1,'unused',2,123,{},normal_gap_2ms=True,normal_direct13=requested)
+                    self.assertEqual(peer.sent,[])
+                else:
+                    r=p.run_session(-1,'unused',2,123,{},normal_gap_2ms=True,normal_direct13=True,
+                                    stop_requested=lambda:bool(peer.sent),after_done=0)
+                    self.assertTrue(r['normal_direct13'])
+        with self.assertRaises(p.TransferError):
+            p.run_session(-1,'unused',2,123,{},normal_direct13=True)
+
     def test_normal_gap_identity(self):
         for actual,requested in ((False,True),(True,False),(True,True)):
             peer=Peer(stop=True)

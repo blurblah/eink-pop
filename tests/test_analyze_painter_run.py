@@ -13,6 +13,14 @@ import painter_usb as p
 
 
 class Tests(unittest.TestCase):
+    def test_direct13_requires_gap_and_separate_result(self):
+        with tempfile.TemporaryDirectory() as d:
+            prefix,obs=self.fixture(d,step=.09);obs['normal_direct13']=True
+            path=Path(str(prefix)+'-observation.json');path.write_text(json.dumps(obs))
+            with self.assertRaises(ValueError):a.analyze(prefix)
+            obs['normal_gap_2ms']=True;path.write_text(json.dumps(obs))
+            r=a.analyze(prefix);self.assertTrue(r['normal_direct13']);self.assertFalse(r['meets_single_run_timing'])
+
     def test_normal_gap_not_original_quality(self):
         with tempfile.TemporaryDirectory() as d:
             prefix,obs=self.fixture(d,step=.09)
