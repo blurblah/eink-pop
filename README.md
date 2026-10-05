@@ -14,6 +14,7 @@ LILYGO 4.7인치 e-paper와 ESP32-S3를 이용해 Prince of Persia의 플레이 
 
 ## 문서
 
+- [전자종이 구동 구조와 개선 가능성](docs/전자종이-구동-구조와-개선-가능성.md): 제조사 드라이버와 NORMAL·FAST의 차이, 실제 개선 범위, 잔상 원인과 구조 변경의 가능성·제약
 - [개발 지침](AGENTS.md): 이 프로젝트의 작업 범위와 검증 원칙
 - [개발 인계](docs/개발-인계.md): 기획 대화에서 확인한 사실, 미검증 사항, 기술 구성과 공식 자료
 - [첫 하드웨어 검증 계획](.Codex/plans/PLAN-20260919-1722-initial-hardware-validation.md): 완료된 계획과 실행 기록
