@@ -111,7 +111,7 @@ def analyze(prefix):
     direct13=bool(observation.get('normal_direct13',False))
     require(not direct13 or gap_trial,'13주사 후보의2ms 설정 누락')
     tone=observation.get('tone','baseline')
-    require(tone in ('baseline','skin_edge_v1'),'알 수 없는 톤 프로파일')
+    require(tone in ('baseline','skin_edge_v1','global_a_v1'),'알 수 없는 톤 프로파일')
     numeric=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125
     return dict(input_mode=observation.get('input_mode','latest_file'),quality=quality,normal_gap_2ms=gap_trial,normal_direct13=direct13,tone=tone,white_pair=int(observation.get('white_pair',0)),black_pair=int(observation.get('black_pair',0)),frames=len(frames),
                 source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),

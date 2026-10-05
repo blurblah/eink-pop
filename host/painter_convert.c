@@ -4,7 +4,7 @@
 
 int painter_convert_abi(void) { return 2; }
 
-int painter_convert(const uint8_t *rgb, size_t rgb_size, uint8_t *out, size_t out_size)
+static int convert_impl(const uint8_t *rgb, size_t rgb_size, uint8_t *out, size_t out_size, int global_tone)
 {
     if (!rgb || !out || rgb_size != 192000 || out_size != 16000) return -1;
     for (size_t y = 0; y < 200; ++y) {
@@ -13,9 +13,15 @@ int painter_convert(const uint8_t *rgb, size_t rgb_size, uint8_t *out, size_t ou
             for (size_t q = 0; q < 4; ++q) {
                 size_t at = (y * 320 + x + q) * 3;
                 unsigned r = rgb[at], g = rgb[at + 1], b = rgb[at + 2];
-                unsigned gray = (77 * r + 150 * g + 29 * b) >> 12;
-                if (gray >= 1 && gray <= 13) ++gray;
-                unsigned level = 3 - (gray + 2) / 5;
+                unsigned gray, level;
+                if (global_tone) {
+                    gray = (77 * r + 150 * g + 29 * b) >> 8;
+                    level = 3 - (gray >= 43) - (gray >= 128) - (gray >= 213);
+                } else {
+                    gray = (77 * r + 150 * g + 29 * b) >> 12;
+                    if (gray >= 1 && gray <= 13) ++gray;
+                    level = 3 - (gray + 2) / 5;
+                }
                 if (y >= 194 && y < 199 && x + q < 69 && g == 0 && b == 0) {
                     if (r == 228) level = 0;
                     else if (r == 184) level = 1;
@@ -26,6 +32,16 @@ int painter_convert(const uint8_t *rgb, size_t rgb_size, uint8_t *out, size_t ou
         }
     }
     return 0;
+}
+
+int painter_convert(const uint8_t *rgb, size_t rgb_size, uint8_t *out, size_t out_size)
+{
+    return convert_impl(rgb, rgb_size, out, out_size, 0);
+}
+
+int painter_convert_global(const uint8_t *rgb, size_t rgb_size, uint8_t *out, size_t out_size)
+{
+    return convert_impl(rgb, rgb_size, out, out_size, 1);
 }
 
 /* 색 기반 시험 프로파일. 기본 변환 및 비피부 픽셀은 변경하지 않는다. */

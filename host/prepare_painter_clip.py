@@ -11,7 +11,7 @@ WIDTH, HEIGHT = 320, 200
 PACKED_BYTES = WIDTH * HEIGHT // 4
 
 
-def convert(rgb):
+def convert(rgb, *, global_tone=False):
     if len(rgb) != WIDTH * HEIGHT * 3:
         raise ValueError('RGB 길이는 320×200×3이어야 합니다')
     rgb = bytes(rgb)
@@ -26,10 +26,15 @@ def convert(rgb):
             value = 0
             for offset in (0, 3, 6, 9):
                 r, g, b = block[offset:offset+3]
-                gray = (77*r + 150*g + 29*b) >> 12
-                if 1 <= gray <= 13:
-                    gray += 1
-                value = (value << 2) | (3 - (gray + 2) // 5)
+                if global_tone:
+                    gray = (77*r + 150*g + 29*b) >> 8
+                    level = 3 - (gray >= 43) - (gray >= 128) - (gray >= 213)
+                else:
+                    gray = (77*r + 150*g + 29*b) >> 12
+                    if 1 <= gray <= 13:
+                        gray += 1
+                    level = 3 - (gray + 2) // 5
+                value = (value << 2) | level
             blocks[block] = value
         packed[i] = value
     # 위치에 의존하는 생명력 보정은 일반 색 캐시와 분리한다.
@@ -46,6 +51,14 @@ def convert(rgb):
             shift = 6 - 2 * (i % 4)
             packed[i//4] = (packed[i//4] & ~(3 << shift)) | (level << shift)
     return bytes(packed)
+
+
+def convert_global(rgb):
+    """전체 휘도에 동일한 A 명암 곡선. 기존 생명력 가독성 보정은 유지."""
+    return convert(rgb, global_tone=True)
+
+
+convert_global.tone = 'global_a_v1'
 
 
 SKIN_COLORS = frozenset(((220,128,108), (216,184,160), (176,112,96)))

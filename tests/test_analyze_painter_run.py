@@ -15,9 +15,11 @@ import painter_usb as p
 class Tests(unittest.TestCase):
     def test_tone_profile_is_not_baseline_quality(self):
         with tempfile.TemporaryDirectory() as d:
-            prefix,obs=self.fixture(d,step=.09);obs['tone']='skin_edge_v1'
-            path=Path(str(prefix)+'-observation.json');path.write_text(json.dumps(obs))
-            r=a.analyze(prefix);self.assertEqual(r['tone'],'skin_edge_v1');self.assertFalse(r['meets_single_run_timing'])
+            prefix,obs=self.fixture(d,step=.09)
+            path=Path(str(prefix)+'-observation.json')
+            for tone in ('skin_edge_v1','global_a_v1'):
+                obs['tone']=tone;path.write_text(json.dumps(obs))
+                r=a.analyze(prefix);self.assertEqual(r['tone'],tone);self.assertFalse(r['meets_single_run_timing'])
             obs['tone']='unknown';path.write_text(json.dumps(obs))
             with self.assertRaises(ValueError):a.analyze(prefix)
 
