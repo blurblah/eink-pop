@@ -137,6 +137,23 @@ class Tests(unittest.TestCase):
                                  stop_requested=(lambda:bool(peer.sent)) if stop else (lambda:False),
                                  timing_diagnostics=diagnostics,quality=quality,white_pair=white_pair,black_pair=black_pair)
         return result,peer,reads
+    def test_normal_gap_identity(self):
+        for actual,requested in ((False,True),(True,False),(True,True)):
+            peer=Peer(stop=True)
+            if actual:peer.queue[0]+=' normal_gap_us=2000'
+            meta={}
+            with patch.object(p,'SerialIO',return_value=peer):
+                if actual!=requested:
+                    with self.assertRaises(p.TransferError):
+                        p.run_session(-1,'unused',2,123,meta,normal_gap_2ms=requested)
+                    self.assertEqual(peer.sent,[])
+                else:
+                    r=p.run_session(-1,'unused',2,123,meta,normal_gap_2ms=requested,
+                                    stop_requested=lambda:bool(peer.sent),after_done=0)
+                    self.assertTrue(r['normal_gap_2ms'])
+        with self.assertRaises(p.TransferError):
+            p.run_session(-1,'unused',2,123,{},quality='FAST',normal_gap_2ms=True)
+
     def test_white_trial_identity(self):
         result,_,_=self.run_peer(quality='FAST',white_pair=True)
         self.assertTrue(result['white_pair'])

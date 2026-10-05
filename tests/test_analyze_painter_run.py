@@ -13,6 +13,16 @@ import painter_usb as p
 
 
 class Tests(unittest.TestCase):
+    def test_normal_gap_not_original_quality(self):
+        with tempfile.TemporaryDirectory() as d:
+            prefix,obs=self.fixture(d,step=.09)
+            obs['normal_gap_2ms']=True
+            Path(str(prefix)+'-observation.json').write_text(json.dumps(obs))
+            r=a.analyze(prefix)
+            self.assertTrue(r['normal_gap_2ms'])
+            self.assertTrue(r['meets_numeric_timing'])
+            self.assertFalse(r['meets_single_run_timing'])
+
     def fixture(self,d,step=.1,same=False,version=5,patch=False,rle=False,lz=False):
         prefix=Path(d)/'run';wire=p.packet(p.START,12,0,b'\x0c',version=version);frames=[];previous=bytes(16000)
         for i in range(12):

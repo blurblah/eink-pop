@@ -33,11 +33,12 @@ uint32_t millis(); void delay(uint32_t); uint32_t getCpuFrequencyMhz(); bool psr
 EPD=r'''
 #pragma once
 #include "Arduino.h"
-#define EPD_LILYGO_EPD47_H716_PRESET 716
 class EPD_Painter {
 public:
  enum class Quality {QUALITY_NORMAL,QUALITY_FAST};
- explicit EPD_Painter(int x) { if(x!=716)__builtin_trap(); }
+ struct Config { int board=716, pass_gap_us_normal=4000; };
+ int gap; const Config* preset;
+ explicit EPD_Painter(const Config& c):gap(c.pass_gap_us_normal),preset(&c) { if(c.board!=716)__builtin_trap(); }
  void setAutoShutdown(bool); void setIdleTimeout(int); void setQuality(Quality); void setPaintProfile(bool);
  bool begin(); bool setDirectTransitions(bool); void clearBuffers(); void clear();
  bool waitForIdle(uint32_t); bool powerOffWhenIdle(uint32_t); uint32_t paintsCompleted();
@@ -47,6 +48,7 @@ public:
  struct PaintTiming { uint32_t cycle=0,passes=0; int64_t discovery_us=0,rowloop_us=0,settle_us=0,neutral_us=0,total_us=0; };
  bool readPaintTiming(PaintTiming&);
 };
+inline EPD_Painter::Config EPD_LILYGO_EPD47_H716_PRESET;
 '''
 HARNESS=r'''
 #include "Arduino.h"
@@ -119,6 +121,15 @@ int main(int argc,char**argv){
  assert(argc==3);scenario=argv[1];std::string dir=argv[2];setup();
  assert(begins==0&&clears==0&&paints==0);
  if(scenario!="rx_buffer")assert(Serial.output.find("quality=" PAINTER_USB_QUALITY_NAME)!=std::string::npos);
+ assert(EPD_LILYGO_EPD47_H716_PRESET.pass_gap_us_normal==4000);
+ assert(panel.preset->pass_gap_us_normal==panel.gap);
+#ifdef PAINTER_USB_NORMAL_GAP_2MS
+ assert(panel.gap==2000);
+ if(scenario!="rx_buffer")assert(Serial.output.find("normal_gap_us=2000")!=std::string::npos);
+#else
+ assert(panel.gap==4000);
+ assert(Serial.output.find("normal_gap_us=")==std::string::npos);
+#endif
 #if defined(EPD_PAINTER_FAST_WHITE_PAIR) && EPD_PAINTER_FAST_WHITE_PAIR == 2
 #ifdef EPD_PAINTER_FAST_BLACK_PAIR
  if(scenario!="rx_buffer")assert(Serial.output.find(" black=pair2")!=std::string::npos);
@@ -296,8 +307,9 @@ def main():
             (p/(name+'_first.bin')).write_bytes(packet(6,1,data))
             (p/(name+'.expected')).write_bytes(raw)
         total=0
-        for fast,diagnostics,white_pair,black_pair in ((False,False,0,0),(False,True,0,0),(True,False,0,0),(True,True,0,0),(True,False,1,0),(True,True,1,0),(True,False,2,0),(True,True,2,0),(True,False,2,2),(True,True,2,2)):
+        for fast,diagnostics,white_pair,black_pair,gap2 in ((False,False,0,0,False),(False,True,0,0,False),(True,False,0,0,False),(True,True,0,0,False),(True,False,1,0,False),(True,True,1,0,False),(True,False,2,0,False),(True,True,2,0,False),(True,False,2,2,False),(True,True,2,2,False),(False,False,0,0,True),(False,True,0,0,True)):
             flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING'] if diagnostics else []
+            if gap2:flags.append('-DPAINTER_USB_NORMAL_GAP_2MS')
             if fast:flags.append('-DPAINTER_USB_FAST')
             if black_pair:flags.append('-DEPD_PAINTER_FAST_BLACK_PAIR=2')
             if white_pair:flags.append(f'-DEPD_PAINTER_FAST_WHITE_PAIR={int(white_pair)}')
@@ -306,5 +318,8 @@ def main():
             selected=cases+(['timing_missing','timing_cycle'] if diagnostics else [])
             for case in selected:subprocess.run([str(p/'check'),case,d],check=True,timeout=10,stdout=subprocess.DEVNULL)
             total+=len(selected)
+        invalid=subprocess.run(['clang++','-std=c++17','-I',d,'-DPAINTER_USB_FAST','-DPAINTER_USB_NORMAL_GAP_2MS',
+                                f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'invalid')],capture_output=True,text=True)
+        assert invalid.returncode != 0 and '중간 속도 시험은 NORMAL 전용' in invalid.stderr
         print(f'실제 USB 스케치 NORMAL/FAST·일반/진단 {total}사례 통과')
 if __name__=='__main__':main()

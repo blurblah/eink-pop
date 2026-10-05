@@ -17,7 +17,7 @@ def compare(prefixes):
         result=analyze(prefix)
         observation=json.loads(Path(str(prefix)+'-observation.json').read_text())
         identity=tuple((f['source_sequence'],f['bitmap_sha256']) for f in observation['frames'])
-        key=(result['quality'],result['input_mode'],bool(observation.get('timing_diagnostics')),int(observation.get('white_pair',0)),int(observation.get('black_pair',0)),identity)
+        key=(result['quality'],result['input_mode'],bool(observation.get('timing_diagnostics')),int(observation.get('white_pair',0)),int(observation.get('black_pair',0)),bool(observation.get('normal_gap_2ms',False)),identity)
         try:label=str(prefix.parent.relative_to(ROOT/'artifacts/performance-loop-20260929'))
         except ValueError:label=str(prefix.parent.relative_to(ROOT))
         groups.setdefault(key,[]).append((label,prefix,result))
@@ -32,14 +32,14 @@ def markdown(groups):
            '이 표는 단일 실행들의 비교이며 광학fps·입력 지연·통계적 유의성을 검증한 결과가 아니다. '
            '동일 픽셀·모드 그룹 자체가 동일 광학 품질을 보증하지는 않는다.','']
     for number,(key,runs) in enumerate(groups.items(),1):
-        quality,mode,diagnostic,white_pair,black_pair,identity=key
-        lines += [f'## 그룹 {number}: {quality} / {mode} / 흰색 보정 {str(white_pair)+"쌍 시험" if white_pair else "기본"} / 검정 보정 {str(black_pair)+"쌍 시험" if black_pair else "기본"} / 내부 계측 {"켜짐" if diagnostic else "꺼짐"}',
+        quality,mode,diagnostic,white_pair,black_pair,gap_trial,identity=key
+        lines += [f'## 그룹 {number}: {quality} / {mode} / NORMAL 간격 {"2ms 시험" if gap_trial else "기본"} / 흰색 보정 {str(white_pair)+"쌍 시험" if white_pair else "기본"} / 검정 보정 {str(black_pair)+"쌍 시험" if black_pair else "기본"} / 내부 계측 {"켜짐" if diagnostic else "꺼짐"}',
                   '',f'원본 번호: {", ".join(str(seq) for seq,_ in identity)}. 초기화 이후11개 간격, p95는 nearest-rank다.','',
                   '| 실행 | 완료 평균 ms | p95 ms | 소프트웨어 장/초 | prepare ms | paint ms | 전송 바이트 | NORMAL 수치 기준 |',
                   '| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |']
         for label,prefix,r in runs:
             a=r['ack_interval_ms'];s=r['subsequent_ms']
-            status='충족' if r['meets_single_run_timing'] else '미달' if quality=='NORMAL' else '별도 모드'
+            status='충족' if r['meets_single_run_timing'] else '미달' if quality=='NORMAL' and not gap_trial else '별도 모드'
             lines.append(f"| {label} | {a['mean']:.3f} | {a['p95']:.3f} | {r['software_completion_hz']:.2f} | "
                          f"{s['prepare_us']['mean']:.3f} | {s['paint_us']['mean']:.3f} | {r['wire_bytes']} | {status} |")
         if len(runs)>1:

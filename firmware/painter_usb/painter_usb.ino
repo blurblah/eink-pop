@@ -24,6 +24,9 @@
 #if defined(EPD_PAINTER_FAST_BLACK_PAIR) && EPD_PAINTER_FAST_BLACK_PAIR != 2
 #error "검정 보정 시험은2쌍으로 제한합니다."
 #endif
+#if defined(PAINTER_USB_NORMAL_GAP_2MS) && defined(PAINTER_USB_FAST)
+#error "중간 속도 시험은 NORMAL 전용입니다."
+#endif
 static constexpr size_t SOURCE_BYTES = 16000, CANVAS_BYTES = 129600;
 static constexpr int64_t RX_LIMIT_US = 5000000, SCREEN_LIMIT_US = 30000000;
 static constexpr uint32_t WAIT_MS = 5000;
@@ -34,7 +37,20 @@ static constexpr auto DISPLAY_QUALITY = EPD_Painter::Quality::QUALITY_FAST;
 #define PAINTER_USB_QUALITY_NAME "NORMAL"
 static constexpr auto DISPLAY_QUALITY = EPD_Painter::Quality::QUALITY_NORMAL;
 #endif
+#ifdef PAINTER_USB_NORMAL_GAP_2MS
+// 제한 비교 전용: 원본 프리셋·파형은 보존하고 4명도 NORMAL 간격만 변경한다.
+static EPD_Painter::Config trialConfig()
+{
+    auto config = EPD_LILYGO_EPD47_H716_PRESET;
+    config.pass_gap_us_normal = 2000;
+    return config;
+}
+// 드라이버가 원본 Config 포인터도 보관하므로 정적 수명을 유지한다.
+static const EPD_Painter::Config gapTrialConfig = trialConfig();
+static EPD_Painter panel(gapTrialConfig);
+#else
 static EPD_Painter panel(EPD_LILYGO_EPD47_H716_PRESET);
+#endif
 
 enum SessionState { WAIT_START, WAIT_FRAME, TERMINAL };
 static SessionState state = WAIT_START;
@@ -117,6 +133,9 @@ static void ready()
 #endif
 #ifdef EPD_PAINTER_FAST_BLACK_PAIR
                    " black=pair2"
+#endif
+#ifdef PAINTER_USB_NORMAL_GAP_2MS
+                   " normal_gap_us=2000"
 #endif
                    " rle=1 lz=1");
     lastReadyMs = millis();
