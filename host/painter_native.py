@@ -35,7 +35,7 @@ def build(output=DEFAULT):
     return manifest
 
 
-def load(output=DEFAULT):
+def load(output=DEFAULT, *, skin_contrast=False):
     output = Path(output).resolve()
     manifest = json.loads(output.with_suffix(output.suffix + '.json').read_text())
     if (not isinstance(manifest, dict) or manifest.get('abi') != 2
@@ -48,8 +48,9 @@ def load(output=DEFAULT):
     if library.painter_convert_abi() != 2:
         raise ValueError('네이티브 변환기 ABI 불일치')
     pointer = ctypes.POINTER(ctypes.c_uint8)
-    library.painter_convert.argtypes = [pointer, ctypes.c_size_t, pointer, ctypes.c_size_t]
-    library.painter_convert.restype = ctypes.c_int
+    convert_function = library.painter_convert_skin if skin_contrast else library.painter_convert
+    convert_function.argtypes = [pointer, ctypes.c_size_t, pointer, ctypes.c_size_t]
+    convert_function.restype = ctypes.c_int
 
     def convert(rgb):
         rgb = bytes(rgb)
@@ -57,9 +58,10 @@ def load(output=DEFAULT):
             raise ValueError('RGB 길이는 320×200×3이어야 합니다')
         source = (ctypes.c_uint8 * 192000).from_buffer_copy(rgb)
         result = (ctypes.c_uint8 * 16000)()
-        if library.painter_convert(source, len(source), result, len(result)) != 0:
+        if convert_function(source, len(source), result, len(result)) != 0:
             raise ValueError('네이티브 변환기 실패')
         return bytes(result)
+    convert.tone = 'skin_edge_v1' if skin_contrast else 'baseline'
     for name in ('painter_lz_encode', 'painter_lz_decode'):
         function = getattr(library, name)
         function.argtypes = [pointer, ctypes.c_size_t, pointer, ctypes.c_size_t]

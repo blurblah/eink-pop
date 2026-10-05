@@ -13,6 +13,14 @@ import painter_usb as p
 
 
 class Tests(unittest.TestCase):
+    def test_tone_profile_is_not_baseline_quality(self):
+        with tempfile.TemporaryDirectory() as d:
+            prefix,obs=self.fixture(d,step=.09);obs['tone']='skin_edge_v1'
+            path=Path(str(prefix)+'-observation.json');path.write_text(json.dumps(obs))
+            r=a.analyze(prefix);self.assertEqual(r['tone'],'skin_edge_v1');self.assertFalse(r['meets_single_run_timing'])
+            obs['tone']='unknown';path.write_text(json.dumps(obs))
+            with self.assertRaises(ValueError):a.analyze(prefix)
+
     def test_direct13_requires_gap_and_separate_result(self):
         with tempfile.TemporaryDirectory() as d:
             prefix,obs=self.fixture(d,step=.09);obs['normal_direct13']=True

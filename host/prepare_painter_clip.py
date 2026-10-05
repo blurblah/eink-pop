@@ -48,6 +48,31 @@ def convert(rgb):
     return bytes(packed)
 
 
+SKIN_COLORS = frozenset(((220,128,108), (216,184,160), (176,112,96)))
+
+
+def convert_skin(rgb):
+    """피부만 어둡게 하되 같은 명도 배경에 닿는 경계는 기존 대비를 보존한다."""
+    rgb = bytes(rgb)
+    packed = bytearray(convert(rgb))
+    skin = [tuple(rgb[i:i+3]) in SKIN_COLORS for i in range(0,len(rgb),3)]
+    for i, selected in enumerate(skin):
+        if not selected:
+            continue
+        y,x = divmod(i,WIDTH)
+        neighbors = ([i-1] if x else []) + ([i+1] if x+1<WIDTH else [])
+        neighbors += ([i-WIDTH] if y else []) + ([i+WIDTH] if y+1<HEIGHT else [])
+        # 비피부는 변경하지 않으므로 앞에서 처리한 피부의 영향을 받지 않는다.
+        if any(not skin[j] and ((packed[j//4] >> (6-2*(j%4))) & 3)==2 for j in neighbors):
+            continue
+        shift = 6-2*(i%4)
+        packed[i//4] = (packed[i//4] & ~(3<<shift)) | (2<<shift)
+    return bytes(packed)
+
+
+convert_skin.tone = 'skin_edge_v1'
+
+
 def unpack(packed):
     if len(packed) != PACKED_BYTES:
         raise ValueError('2bpp 길이 오류')

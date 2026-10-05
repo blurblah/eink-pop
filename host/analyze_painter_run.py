@@ -110,15 +110,17 @@ def analyze(prefix):
     require(not gap_trial or quality=='NORMAL','2ms 후보의 화질 모드 오류')
     direct13=bool(observation.get('normal_direct13',False))
     require(not direct13 or gap_trial,'13주사 후보의2ms 설정 누락')
+    tone=observation.get('tone','baseline')
+    require(tone in ('baseline','skin_edge_v1'),'알 수 없는 톤 프로파일')
     numeric=len(frames)==12 and all(changed) and gap['mean']<=100 and gap['p95']<=125
-    return dict(input_mode=observation.get('input_mode','latest_file'),quality=quality,normal_gap_2ms=gap_trial,normal_direct13=direct13,white_pair=int(observation.get('white_pair',0)),black_pair=int(observation.get('black_pair',0)),frames=len(frames),
+    return dict(input_mode=observation.get('input_mode','latest_file'),quality=quality,normal_gap_2ms=gap_trial,normal_direct13=direct13,tone=tone,white_pair=int(observation.get('white_pair',0)),black_pair=int(observation.get('black_pair',0)),frames=len(frames),
                 source_sequences=[f['source_sequence'] for f in frames],wire_bytes=len(wire),
                 first_display_ms=int(frames[0]['ack']['display_us'])/1000,
                 ack_interval_ms=gap,software_completion_hz=1000/gap['mean'],
                 source_steps=source_steps,skipped_source_frames=sum(s-1 for s in source_steps),host_timing=host_times,
                 subsequent_ms=times,driver_timing=driver,all_frames_changed=all(changed),
                 verified_packet_crc=True,quiet_seconds=observation['after_done_seconds'],
-                meets_numeric_timing=numeric,meets_single_run_timing=quality=='NORMAL' and not gap_trial and numeric,
+                meets_numeric_timing=numeric,meets_single_run_timing=quality=='NORMAL' and not gap_trial and tone=='baseline' and numeric,
                 limitation='단일 제한 실행. 캡처 재생은 실시간 목표 달성이 아니며 ACK는 광학fps·입력 지연이 아니다.')
 
 

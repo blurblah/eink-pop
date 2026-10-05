@@ -59,7 +59,7 @@ def read_frame(path, converter=convert):
         read_started_monotonic=started, read_finished_monotonic=time.monotonic(),
         file_mtime_ns=stat.st_mtime_ns, file_bytes=stat.st_size,
         ppm_sha256=hashlib.sha256(raw).hexdigest(), bitmap_sha256=hashlib.sha256(payload).hexdigest(),
-        conversion='corrected_gray_nearest4_no_dither', bpp=2, payload_bytes=16000,
+        conversion='corrected_gray_nearest4_no_dither', tone=getattr(converter,'tone','baseline'), bpp=2, payload_bytes=16000,
         white=0, black=3, pixel_order='msb_first')
 
 
@@ -277,6 +277,7 @@ def main(argv=None):
     parser.add_argument('--black-pair',type=int,default=0,choices=(2,),help='검정 이력 차이 시험2쌍')
     parser.add_argument('--normal-gap-2ms',action='store_true',help='NORMAL 2ms 간격 제한 시험 앱 전용')
     parser.add_argument('--normal-direct13',action='store_true',help='NORMAL 2ms 직접 전이13주사 제한 시험 앱 전용')
+    parser.add_argument('--skin-contrast',action='store_true',help='피부/옷 명암 분리와 바닥 경계 보존 시험')
     parser.add_argument('--native-conversion',action='store_true',help='검증된 동일 픽셀 C 변환기 사용')
     parser.add_argument('--log-prefix',type=Path,required=True)
     args=parser.parse_args(argv)
@@ -296,9 +297,13 @@ def main(argv=None):
     previous_handler=signal.signal(signal.SIGINT,request_stop)
     try:
         converter = convert
+        if args.skin_contrast:
+            from prepare_painter_clip import convert_skin
+            converter = convert_skin
+        metadata['tone'] = 'skin_edge_v1' if args.skin_contrast else 'baseline'
         if args.native_conversion:
             from painter_native import load
-            converter = load()
+            converter = load(skin_contrast=True) if args.skin_contrast else load()
         metadata['conversion_backend'] = 'native_c' if args.native_conversion else 'python'
         reader = (capture_reader(args.replay_capture,args.start_sequence,args.frames,converter)
                   if args.replay_capture else lambda path: read_frame(path,converter))

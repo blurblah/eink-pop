@@ -11,10 +11,10 @@ import test_analyze_painter_run as fixture
 
 
 class Tests(unittest.TestCase):
-    def make(self,root,name,quality='NORMAL',source_offset=0,mode='captured_replay',white_pair=False,black_pair=0,gap_trial=False,direct13=False):
+    def make(self,root,name,quality='NORMAL',source_offset=0,mode='captured_replay',white_pair=False,black_pair=0,gap_trial=False,direct13=False,tone='baseline'):
         path=root/name;path.mkdir()
         prefix,obs=fixture.Tests().fixture(path,step=.09)
-        obs['quality']=quality;obs['input_mode']=mode;obs['white_pair']=white_pair;obs['black_pair']=black_pair;obs['normal_gap_2ms']=gap_trial;obs['normal_direct13']=direct13
+        obs['quality']=quality;obs['input_mode']=mode;obs['white_pair']=white_pair;obs['black_pair']=black_pair;obs['normal_gap_2ms']=gap_trial;obs['normal_direct13']=direct13;obs['tone']=tone
         for f in obs['frames']:f['source_sequence']+=source_offset
         Path(str(prefix)+'-observation.json').write_text(json.dumps(obs))
         return prefix
@@ -22,13 +22,13 @@ class Tests(unittest.TestCase):
     def test_same_input_only(self):
         with tempfile.TemporaryDirectory() as d,patch.object(c,'ROOT',Path(d).resolve()):
             root=Path(d)
-            prefixes=[self.make(root,'normal-a'),self.make(root,'normal-b'),self.make(root,'normal-gap',gap_trial=True),self.make(root,'normal-direct13',gap_trial=True,direct13=True),
+            prefixes=[self.make(root,'normal-a'),self.make(root,'normal-b'),self.make(root,'skin',tone='skin_edge_v1'),self.make(root,'normal-gap',gap_trial=True),self.make(root,'normal-direct13',gap_trial=True,direct13=True),
                       self.make(root,'fast',quality='FAST'),self.make(root,'other',source_offset=1),
                       self.make(root,'live',mode='latest_file'),self.make(root,'white',quality='FAST',white_pair=True),self.make(root,'white2',quality='FAST',white_pair=2),self.make(root,'black2',quality='FAST',white_pair=2,black_pair=2)]
             groups=c.compare(prefixes)
-            self.assertEqual([len(r) for r in groups.values()],[2,1,1,1,1,1,1,1,1])
+            self.assertEqual([len(r) for r in groups.values()],[2,1,1,1,1,1,1,1,1,1])
             text=c.markdown(groups)
-            self.assertIn('13주사 시험',text);self.assertIn('2ms 시험',text);self.assertIn('별도 모드',text);self.assertEqual(text.count('첫 실행 대비'),1)
+            self.assertIn('skin_edge_v1',text);self.assertIn('13주사 시험',text);self.assertIn('2ms 시험',text);self.assertIn('별도 모드',text);self.assertEqual(text.count('첫 실행 대비'),1)
 
     def test_corruption_refused(self):
         with tempfile.TemporaryDirectory() as d,patch.object(c,'ROOT',Path(d).resolve()):
