@@ -33,6 +33,14 @@
 #ifdef PAINTER_USB_NORMAL_DIRECT13
 #include "normal_direct13.h"
 #endif
+#if defined(PAINTER_USB_PLAY120) && !defined(PAINTER_USB_NORMAL_DIRECT13)
+#error "120장 시험은 NORMAL 2ms 13주사 설정이 필요합니다."
+#endif
+#ifdef PAINTER_USB_PLAY120
+static constexpr uint32_t MAX_SESSION_FRAMES = 120;
+#else
+static constexpr uint32_t MAX_SESSION_FRAMES = 12;
+#endif
 static constexpr size_t SOURCE_BYTES = 16000, CANVAS_BYTES = 129600;
 static constexpr int64_t RX_LIMIT_US = 5000000, SCREEN_LIMIT_US = 30000000;
 static constexpr uint32_t WAIT_MS = 5000;
@@ -149,6 +157,9 @@ static void ready()
 #ifdef PAINTER_USB_NORMAL_DIRECT13
                    " normal_direct=13"
 #endif
+#ifdef PAINTER_USB_PLAY120
+                   " play_max=120"
+#endif
                    " rle=1 lz=1");
     lastReadyMs = millis();
 }
@@ -207,7 +218,7 @@ static bool validateHeader()
 static void beginSession(uint32_t id)
 {
     session = id;
-    if (startPayload < 1 || startPayload > 12) { fail("frame_limit"); return; }
+    if (startPayload < 1 || startPayload > MAX_SESSION_FRAMES) { fail("frame_limit"); return; }
     state = WAIT_FRAME;
     frameLimit = startPayload;
     Serial.printf("PAINTER_USB_ACCEPT session=%lu max_frames=%lu\r\n",

@@ -165,9 +165,9 @@ int main(int argc,char**argv){
 if(scenario=="old_version"){start[4]=4;crc(start);}
  if(scenario=="old_version5"){start[4]=5;crc(start);}
  if(scenario=="old_version6"){start[4]=6;crc(start);}
- if(scenario=="limit"){start[20]=13;crc(start);}
+ if(scenario=="limit"){start[20]=MAX_SESSION_FRAMES+1;crc(start);}
  if(scenario=="early")start.insert(start.end(),first.begin(),first.end());
- if(scenario=="full"){start[20]=12;crc(start);}
+ if(scenario=="full"){start[20]=MAX_SESSION_FRAMES;crc(start);}
  feed(start);
  if(scenario=="stop_before")feed(file(dir+"/stop1.bin"));
  else if(scenario=="partial_timeout"){feed({0x45});clockUs+=5000000;loop();}
@@ -201,7 +201,7 @@ if(scenario=="old_version"){start[4]=4;crc(start);}
       second=file(dir+"/"+scenario+".bin");expected=file(dir+"/"+scenario+".expected");
     }
     feed(second);
-    if(scenario=="full")for(int n=3;n<=12;++n){second[12]=n;crc(second);feed(second);}
+    if(scenario=="full")for(int n=3;n<=MAX_SESSION_FRAMES;++n){second[12]=n;crc(second);feed(second);}
    }
   }
  }
@@ -223,7 +223,7 @@ if(scenario=="old_version"){start[4]=4;crc(start);}
  if(scenario=="normal")assert(paints==2&&frames==2&&applied==2);
  if(scenario=="same")assert(paints==1&&frames==2&&applied==1);
  if(scenario=="white")assert(paints==0&&clears==1&&frames==2&&applied==1);
- if(scenario=="full")assert(paints==2&&frames==12);
+ if(scenario=="full")assert(paints==2&&frames==MAX_SESSION_FRAMES);
  if(scenario=="frame_crc"||scenario=="session"||scenario=="sequence"||scenario=="length"||scenario=="early")assert(begins==0);
  if(scenario=="direct"||scenario=="begin")assert(clears==0&&paints==0);
  auto output=Serial.output;auto before=paints;feed(start);loop();assert(Serial.output==output&&paints==before);
@@ -316,8 +316,11 @@ def main():
             (p/(name+'_first.bin')).write_bytes(packet(6,1,data))
             (p/(name+'.expected')).write_bytes(raw)
         total=0
-        for fast,diagnostics,white_pair,black_pair,gap2,direct13 in ((False,False,0,0,False,False),(False,True,0,0,False,False),(True,False,0,0,False,False),(True,True,0,0,False,False),(True,False,1,0,False,False),(True,True,1,0,False,False),(True,False,2,0,False,False),(True,True,2,0,False,False),(True,False,2,2,False,False),(True,True,2,2,False,False),(False,False,0,0,True,False),(False,True,0,0,True,False),(False,False,0,0,True,True),(False,True,0,0,True,True)):
+        configurations = ((False,False,0,0,False,False),(False,True,0,0,False,False),(True,False,0,0,False,False),(True,True,0,0,False,False),(True,False,1,0,False,False),(True,True,1,0,False,False),(True,False,2,0,False,False),(True,True,2,0,False,False),(True,False,2,2,False,False),(True,True,2,2,False,False),(False,False,0,0,True,False),(False,True,0,0,True,False),(False,False,0,0,True,True),(False,True,0,0,True,True))
+        configurations = [(*c,False) for c in configurations]+[(False,True,0,0,True,True,True)]
+        for fast,diagnostics,white_pair,black_pair,gap2,direct13,play120 in configurations:
             flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING'] if diagnostics else []
+            if play120:flags.append('-DPAINTER_USB_PLAY120')
             if direct13:flags.append('-DPAINTER_USB_NORMAL_DIRECT13')
             if gap2:flags.append('-DPAINTER_USB_NORMAL_GAP_2MS')
             if fast:flags.append('-DPAINTER_USB_FAST')
@@ -334,5 +337,8 @@ def main():
         invalid=subprocess.run(['clang++','-std=c++17','-I',d,'-DPAINTER_USB_NORMAL_DIRECT13',
                                 f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'invalid')],capture_output=True,text=True)
         assert invalid.returncode != 0 and '13주사 시험은 NORMAL 2ms 설정이 필요' in invalid.stderr
+        invalid=subprocess.run(['clang++','-std=c++17','-I',d,'-DPAINTER_USB_PLAY120',
+                                f'-DSKETCH_PATH="{ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'invalid')],capture_output=True,text=True)
+        assert invalid.returncode != 0 and '120장 시험은 NORMAL' in invalid.stderr
         print(f'실제 USB 스케치 NORMAL/FAST·일반/진단 {total}사례 통과')
 if __name__=='__main__':main()

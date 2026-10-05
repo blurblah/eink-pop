@@ -83,6 +83,36 @@ class Peer:
         return dict(bytes=len(wire),bytes_written=len(wire),send_started_monotonic=time.monotonic())
 
 class Tests(unittest.TestCase):
+    def test_play120_bound_and_identity(self):
+        options=dict(play120=True,normal_gap_2ms=True,normal_direct13=True)
+        for count in (0,121,255):
+            with self.assertRaises(p.TransferError):p.run_session(-1,'unused',count,123,{},**options)
+            with self.assertRaises(p.TransferError):p.packet(p.START,123,0,bytes([count]),play120=True)
+        with self.assertRaises(p.TransferError):p.run_session(-1,'unused',120,123,{})
+        with self.assertRaises(p.TransferError):p.run_session(-1,'unused',120,123,{},play120=True)
+        for version in (4,5,6):
+            with self.assertRaises(p.TransferError):p.packet(p.START,123,0,b'\x78',play120=True,version=version)
+        for actual,requested in ((False,True),(True,False),(True,True)):
+            peer=Peer();peer.queue[0]+=' normal_gap_us=2000 normal_direct=13'
+            if actual:peer.queue[0]+=' play_max=120'
+            reads=[]
+            def reader(_):
+                self.assertEqual(len(reads),peer.acks)
+                reads.append(1)
+                return b'raw',bytes([len(reads)%2+1])*16000,dict(source_sequence=len(reads))
+            with patch.object(p,'SerialIO',return_value=peer):
+                if actual!=requested:
+                    with self.assertRaises(p.TransferError):
+                        p.run_session(-1,'unused',12,123,{},normal_gap_2ms=True,normal_direct13=True,play120=requested)
+                    self.assertEqual(peer.sent,[])
+                else:
+                    r=p.run_session(-1,'unused',120,123,{},frame_reader=reader,after_done=0,**options)
+                    self.assertEqual(r['done']['frames'],'120')
+                    self.assertEqual(r['done']['applied'],'120')
+                    self.assertEqual(r['done']['poweroff_returned'],'1')
+                    self.assertEqual(len(peer.sent),121)
+                    self.assertEqual(peer.sent[0][20],120)
+
     def test_lz_transfer_and_version_identity(self):
         payload=bytes(range(256))*62+bytes(range(128))
         self.assertEqual(len(payload),16000)
