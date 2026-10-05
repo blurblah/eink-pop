@@ -36,13 +36,27 @@
 #if defined(PAINTER_USB_PLAY120) && !defined(PAINTER_USB_NORMAL_DIRECT13)
 #error "120장 시험은 NORMAL 2ms 13주사 설정이 필요합니다."
 #endif
-#ifdef PAINTER_USB_PLAY120
+#if defined(PAINTER_USB_INTERACTIVE) && (!defined(PAINTER_USB_NORMAL_DIRECT13) || defined(PAINTER_USB_PLAY120))
+#error "대화형 시험은 13주사2ms 전용이며 PLAY120과 함께 사용하지 않습니다."
+#endif
+#ifdef PAINTER_USB_INTERACTIVE
+#define WIRE_VERSION_TEXT "8"
+static constexpr uint8_t WIRE_VERSION = 8, START_BYTES = 2;
+static constexpr uint32_t MAX_SESSION_FRAMES = 6000;
+static constexpr int64_t SCREEN_LIMIT_US = 600000000, REFRESH_US = 30000000;
+#elif defined(PAINTER_USB_PLAY120)
+#define WIRE_VERSION_TEXT "7"
+static constexpr uint8_t WIRE_VERSION = 7, START_BYTES = 1;
+static constexpr int64_t SCREEN_LIMIT_US = 30000000;
 static constexpr uint32_t MAX_SESSION_FRAMES = 120;
 #else
+#define WIRE_VERSION_TEXT "7"
+static constexpr uint8_t WIRE_VERSION = 7, START_BYTES = 1;
+static constexpr int64_t SCREEN_LIMIT_US = 30000000;
 static constexpr uint32_t MAX_SESSION_FRAMES = 12;
 #endif
 static constexpr size_t SOURCE_BYTES = 16000, CANVAS_BYTES = 129600;
-static constexpr int64_t RX_LIMIT_US = 5000000, SCREEN_LIMIT_US = 30000000;
+static constexpr int64_t RX_LIMIT_US = 5000000;
 static constexpr uint32_t WAIT_MS = 5000;
 #ifdef PAINTER_USB_FAST
 #define PAINTER_USB_QUALITY_NAME "FAST"
@@ -77,7 +91,10 @@ static uint8_t *previous = nullptr, *incoming = nullptr, *canvas = nullptr, *enc
 static bool panelInitialized = false;
 static int64_t screenStart = -1, receiveWindow = -1, packetStart = -1;
 static uint32_t lastReadyMs = 0;
-static uint8_t header[20], crcBytes[4], startPayload;
+static uint8_t header[20], crcBytes[4], startPayload[2];
+#ifdef PAINTER_USB_INTERACTIVE
+static int64_t lastRefresh = -1;
+#endif
 static size_t headerUsed = 0, payloadUsed = 0, crcUsed = 0;
 static uint32_t payloadLength = 0, runningCrc = 0xFFFFFFFFU;
 
@@ -137,7 +154,7 @@ static void fail(const char *reason)
 
 static void ready()
 {
-    Serial.println("PAINTER_USB_READY version=7 panel=untouched driver=ffeea2a board=H716 quality=" PAINTER_USB_QUALITY_NAME " gray=4 direct=1 profile=0 packed=1"
+    Serial.println("PAINTER_USB_READY version=" WIRE_VERSION_TEXT " panel=untouched driver=ffeea2a board=H716 quality=" PAINTER_USB_QUALITY_NAME " gray=4 direct=1 profile=0 packed=1"
 #ifdef PAINTER_USB_DIAGNOSTICS
                    " timing=1"
 #else
@@ -160,6 +177,9 @@ static void ready()
 #ifdef PAINTER_USB_PLAY120
                    " play_max=120"
 #endif
+#ifdef PAINTER_USB_INTERACTIVE
+                   " play_max=6000 screen_limit_ms=600000 refresh_ms=30000"
+#endif
                    " rle=1 lz=1");
     lastReadyMs = millis();
 }
@@ -181,7 +201,7 @@ static bool checkLimits()
 
 static bool validateHeader()
 {
-    if (memcmp(header, "EPK1", 4) != 0 || header[4] != 7 || header[6] || header[7]) {
+    if (memcmp(header, "EPK1", 4) != 0 || header[4] != WIRE_VERSION || header[6] || header[7]) {
         fail("header");
         return false;
     }
@@ -190,7 +210,7 @@ static bool validateHeader()
     const uint32_t sequence = readLe32(header + 12);
     payloadLength = readLe32(header + 16);
     if (state == WAIT_START) {
-        if (type != 1 || sequence != 0 || packetSession == 0 || payloadLength != 1) {
+        if (type != 1 || sequence != 0 || packetSession == 0 || payloadLength != START_BYTES) {
             fail("start_header");
             return false;
         }
@@ -218,9 +238,10 @@ static bool validateHeader()
 static void beginSession(uint32_t id)
 {
     session = id;
-    if (startPayload < 1 || startPayload > MAX_SESSION_FRAMES) { fail("frame_limit"); return; }
+    const uint32_t requested = startPayload[0] | (START_BYTES == 2 ? uint32_t(startPayload[1]) << 8 : 0);
+    if (requested < 1 || requested > MAX_SESSION_FRAMES) { fail("frame_limit"); return; }
     state = WAIT_FRAME;
-    frameLimit = startPayload;
+    frameLimit = requested;
     Serial.printf("PAINTER_USB_ACCEPT session=%lu max_frames=%lu\r\n",
                   (unsigned long)session, (unsigned long)frameLimit);
     if (getCpuFrequencyMhz() != 240 || !psramFound() || esp_spiram_get_size() < 8388608) {
@@ -275,7 +296,7 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
     if (!checkLimits()) return;
     const int64_t displayStart = esp_timer_get_time();
     const bool firstFrame = !panelInitialized;
-    const bool changed = memcmp(previous, incoming, SOURCE_BYTES) != 0;
+    bool refreshed = false;
     int64_t clearUs = 0, prepareUs = 0, paintUs = 0;
     uint32_t cycles = 0;
 #ifdef PAINTER_USB_DIAGNOSTICS
@@ -297,6 +318,22 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
         if (!panel.waitForIdle(WAIT_MS)) { fail("clear_timeout"); return; }
         clearUs = esp_timer_get_time() - started;
     }
+#ifdef PAINTER_USB_INTERACTIVE
+    if (firstFrame) lastRefresh = esp_timer_get_time();
+    else if (esp_timer_get_time() - lastRefresh >= REFRESH_US) {
+        Serial.printf("PAINTER_USB_REFRESH session=%lu seq=%lu\r\n", (unsigned long)session, (unsigned long)sequence);
+        const int64_t started = esp_timer_get_time();
+        panel.clear();
+        if (!panel.waitForIdle(WAIT_MS)) { fail("clear_timeout"); return; }
+        clearUs = esp_timer_get_time() - started;
+        panel.clearBuffers();
+        memset(previous, 0, SOURCE_BYTES);
+        memset(canvas, 0, CANVAS_BYTES);
+        refreshed = true;
+        lastRefresh = esp_timer_get_time();
+    }
+#endif
+    const bool changed = memcmp(previous, incoming, SOURCE_BYTES) != 0;
     if (changed) {
         if (!checkLimits()) return;
         const int64_t prepared = esp_timer_get_time();
@@ -313,7 +350,7 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
         if (!panel.readPaintTiming(timing) || timing.cycle != before + 1) { fail("timing"); return; }
 #endif
     }
-    if (firstFrame || changed) ++applied;
+    if (firstFrame || refreshed || changed) ++applied;
     uint8_t *old = previous; previous = incoming; incoming = old;
     ++frames; ++expectedSequence;
     const int64_t ended = esp_timer_get_time();
@@ -330,7 +367,7 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
 #endif
     Serial.printf("PAINTER_USB_ACK session=%lu seq=%lu crc=%08lx result=%s rx_us=%lld decode_us=%lld display_us=%lld clear_us=%lld prepare_us=%lld paint_us=%lld cycles=%lu elapsed_us=%lld\r\n",
                   (unsigned long)session, (unsigned long)sequence, (unsigned long)packetCrc,
-                  firstFrame || changed ? "applied" : "unchanged", (long long)rxUs, (long long)decodeUs,
+                  firstFrame || refreshed || changed ? "applied" : "unchanged", (long long)rxUs, (long long)decodeUs,
                   (long long)(ended - displayStart), (long long)clearUs,
                   (long long)prepareUs, (long long)paintUs, (unsigned long)cycles,
                   (long long)(ended - screenStart));
@@ -445,7 +482,7 @@ void loop()
             if (state == TERMINAL) return;
             if (headerUsed == sizeof(header) && !validateHeader()) return;
         } else if (payloadUsed < payloadLength) {
-            uint8_t *destination = state == WAIT_START ? &startPayload : ((header[5] == 4 || header[5] == 5 || header[5] == 6) ? encoded : incoming);
+            uint8_t *destination = state == WAIT_START ? startPayload : ((header[5] == 4 || header[5] == 5 || header[5] == 6) ? encoded : incoming);
             received = readChunk(destination + payloadUsed, payloadLength - payloadUsed, available);
             if (state == TERMINAL) return;
             runningCrc = updateCrc(runningCrc, destination + payloadUsed, received);

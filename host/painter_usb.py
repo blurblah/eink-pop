@@ -31,13 +31,14 @@ READY = dict(version='7', panel='untouched', driver='ffeea2a', board='H716',
 
 
 def packet(kind, session, sequence, payload=b'', version=VERSION, *, play120=False):
-    valid = (kind == START and sequence == 0 and len(payload) == 1 and 1 <= payload[0] <= (120 if play120 and version == 7 else 12)
+    valid = (version == 8 and kind == START and sequence == 0 and len(payload) == 2 and 1 <= int.from_bytes(payload,"little") <= 6000
+             or version != 8 and kind == START and sequence == 0 and len(payload) == 1 and 1 <= payload[0] <= (120 if play120 and version == 7 else 12)
              or kind == FRAME and sequence > 0 and len(payload) == PIXEL_BYTES
              or version >= 5 and kind == PATCH and sequence > 1 and len(payload) < PIXEL_BYTES
              or version >= 6 and kind == RLE and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
-             or version == 7 and kind == LZ and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
+             or version >= 7 and kind == LZ and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
              or kind == STOP and sequence > 0 and not payload)
-    if version not in (4,5,6,7) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
+    if version not in (4,5,6,7,8) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
         raise TransferError('패킷 종류·세션·순서·길이 오류')
     body = HEADER.pack(b'EPK1', version, kind, 0, session, sequence, len(payload)) + payload
     return body + struct.pack('<I', zlib.crc32(body) & 0xffffffff)
@@ -85,8 +86,8 @@ def capture_reader(directory, start, count, converter=convert):
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
                 stop_requested=lambda: False, frame_reader=read_frame, after_done=10.0,
-                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0, lz_encoder=encode_lz, normal_gap_2ms=False, normal_direct13=False, play120=False):
-    if not 1 <= frames <= (120 if play120 else 12) or not 1 <= session <= 0xffffffff:
+                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0, lz_encoder=encode_lz, normal_gap_2ms=False, normal_direct13=False, play120=False, interactive=False):
+    if not 1 <= frames <= (6000 if interactive else 120 if play120 else 12) or not 1 <= session <= 0xffffffff:
         raise TransferError('세션·프레임 범위 오류')
     if quality not in ('NORMAL','FAST'):raise TransferError('지원하지 않는 화질 모드')
     if white_pair not in (False,1,2):raise TransferError('흰색 복귀 시험은1~2쌍만 허용')
@@ -95,6 +96,9 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     if normal_gap_2ms and quality != 'NORMAL':raise TransferError('2ms 간격 시험은 NORMAL 전용')
     if normal_direct13 and not normal_gap_2ms:raise TransferError('13주사 시험은 NORMAL 2ms 설정 필요')
     if play120 and not normal_direct13:raise TransferError('120장 시험은 NORMAL 2ms 13주사 설정 필요')
+    if interactive and (play120 or not normal_direct13):raise TransferError('대화형 시험은 13주사2ms 전용이며 PLAY120과 함께 사용 불가')
+    protocol = 8 if interactive else VERSION
+    limit_seconds = 600 if interactive else 30
     io = SerialIO(fd, raw_log, tx_log, metadata)
     expected_ready = {**READY,'timing':str(int(timing_diagnostics)),'quality':quality}
     if white_pair:expected_ready['white']='pair2' if white_pair==2 else 'pair'
@@ -102,9 +106,10 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     if normal_gap_2ms:expected_ready['normal_gap_us']='2000'
     if normal_direct13:expected_ready['normal_direct']='13'
     if play120:expected_ready['play_max']='120'
+    if interactive:expected_ready.update(version='8',play_max='6000',screen_limit_ms='600000',refresh_ms='30000')
     metadata.update(status='진행 중', started_at=stamp(), session=session, max_frames=frames,
-                    protocol_version=VERSION, bpp=2, timing_diagnostics=timing_diagnostics, quality=quality,
-                    white_pair=white_pair, black_pair=black_pair, normal_gap_2ms=normal_gap_2ms, normal_direct13=normal_direct13, play120=play120, frames=[], start_packets_sent=0, stop_packets_sent=0)
+                    protocol_version=protocol, bpp=2, timing_diagnostics=timing_diagnostics, quality=quality,
+                    white_pair=white_pair, black_pair=black_pair, normal_gap_2ms=normal_gap_2ms, normal_direct13=normal_direct13, play120=play120, interactive=interactive, frames=[], start_packets_sent=0, stop_packets_sent=0)
     started = False
     deadline = time.monotonic() + 15
     count = applied = 0
@@ -150,7 +155,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         elif v['reason'] == 'stop':
             if not stopped: raise TransferError('요청하지 않은 STOP')
         elif v['reason'] == 'time_limit':
-            if stopped or (last_elapsed < 30000000 and time.monotonic()-sent_at < 30):
+            if stopped or (last_elapsed < limit_seconds*1000000 and time.monotonic()-sent_at < limit_seconds):
                 raise TransferError('시간 한도 근거 없음')
         else:
             raise TransferError('정상 종료가 아님')
@@ -172,8 +177,8 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         metadata.update(status='시작 전 취소', finished_at=stamp())
         return metadata
     sent_at = time.monotonic()
-    deadline = sent_at + 45
-    io.write_all(packet(START,session,0,bytes([frames]),play120=play120), min(deadline,time.monotonic()+5))
+    deadline = sent_at + limit_seconds + 15
+    io.write_all(packet(START,session,0,frames.to_bytes(2 if interactive else 1,"little"),version=protocol,play120=play120), min(deadline,time.monotonic()+5))
     metadata['start_packets_sent'] = 1
     started = True
     accept_until = time.monotonic()+5
@@ -189,13 +194,18 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     while True:
         receive_deadline = min(deadline,event['received_monotonic']+4.5)
         if stop_requested():
-            io.write_all(packet(STOP,session,count+1),receive_deadline)
+            io.write_all(packet(STOP,session,count+1,version=protocol),receive_deadline)
             metadata['stop_packets_sent'] = 1
             v,event = expect('PAINTER_USB_DONE',5)
             return finish(v,event,True)
         # ACK 이후에 열어 읽는다. 큐의 과거 화면을 차례로 보내지 않는다.
         fresh_until = min(receive_deadline,time.monotonic()+1)
         while True:
+            if stop_requested():
+                io.write_all(packet(STOP,session,count+1,version=protocol),receive_deadline)
+                metadata['stop_packets_sent'] = 1
+                v,event = expect('PAINTER_USB_DONE',5)
+                return finish(v,event,True)
             raw,payload,info = frame_reader(frame_path)
             source_seq = info['source_sequence']
             if source_seq < last_source: raise TransferError('원본 게임 번호 역행')
@@ -217,7 +227,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             compressed = lz_encoder(payload)
             if compressed is not None and len(compressed) < (len(payload) if encoded is None else len(encoded)):
                 kind, encoded = LZ, compressed
-        wire = packet(kind,session,count+1,payload if encoded is None else encoded)
+        wire = packet(kind,session,count+1,payload if encoded is None else encoded,version=protocol)
         crc = struct.unpack('<I',wire[-4:])[0]
         info.update(sequence=count+1,crc=f'{crc:08x}',packet_type=kind,wire_payload_bytes=len(wire)-24)
         metadata['frames'].append(info)
@@ -226,6 +236,17 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         if marker == 'PAINTER_USB_DONE':
             if v.get('reason') != 'time_limit': raise TransferError('ACK 없는 종료')
             return finish(v,event)
+        refreshed = marker == 'PAINTER_USB_REFRESH'
+        if refreshed:
+            if not interactive or count == 0:raise TransferError('요청하지 않은 주기 정리')
+            exact(v,'session seq');same_session(v)
+            if unsigned(v,'seq') != count+1:raise TransferError('정리 순서 오류')
+            info['periodic_refresh'] = event
+            expected_changed = payload != bytes(PIXEL_BYTES)
+            marker,v,event=response(time.monotonic()+10)
+            if marker == 'PAINTER_USB_DONE':
+                if v.get('reason') != 'time_limit':raise TransferError('정리 중 비정상 종료')
+                return finish(v,event)
         if timing_diagnostics and expected_changed:
             if marker != 'PAINTER_USB_TIMING':raise TransferError('완료 진단 누락')
             exact(v,'session seq cycle passes discovery_us rowloop_us settle_us neutral_us total_us')
@@ -249,9 +270,9 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             raise TransferError('드라이버 내부 시간이 paint 시간 초과')
         if times['cycles'] > 1 or times['clear_us']+times['prepare_us']+times['paint_us'] > times['display_us'] or times['elapsed_us'] < last_elapsed:
             raise TransferError('ACK 시간·주기 오류')
-        if (count == 0 and times['clear_us'] <= 0) or (count and times['clear_us']):
+        if (count == 0 and times['clear_us'] <= 0) or (count and not refreshed and times['clear_us']) or (refreshed and times['clear_us']<=0):
             raise TransferError('최초/후속 전체 정리 불일치')
-        if times['cycles'] != int(expected_changed) or v['result'] != ('applied' if not count or expected_changed else 'unchanged'):
+        if times['cycles'] != int(expected_changed) or v['result'] != ('applied' if not count or refreshed or expected_changed else 'unchanged'):
             raise TransferError('실제 입력과 구동 결과 불일치')
         if v['result']=='unchanged' and any(times[k] for k in ('clear_us','prepare_us','paint_us','cycles')):
             raise TransferError('무변경 화면의 구동 감지')
@@ -260,7 +281,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         last_elapsed = times['elapsed_us']
         count += 1
         applied += v['result']=='applied'
-        if count == frames or last_elapsed >= 30000000:
+        if count == frames or last_elapsed >= limit_seconds*1000000:
             v,event = expect('PAINTER_USB_DONE',5)
             return finish(v,event)
 
@@ -279,6 +300,8 @@ def main(argv=None):
     parser.add_argument('--black-pair',type=int,default=0,choices=(2,),help='검정 이력 차이 시험2쌍')
     parser.add_argument('--normal-gap-2ms',action='store_true',help='NORMAL 2ms 간격 제한 시험 앱 전용')
     parser.add_argument('--normal-direct13',action='store_true',help='NORMAL 2ms 직접 전이13주사 제한 시험 앱 전용')
+    parser.add_argument('--interactive',action='store_true',help='사용자중단/최대10분6000장·주기정리 전용 앱')
+    parser.add_argument('--stop-file',type=Path,help='파일 생성 시 정상 STOP 요청')
     parser.add_argument('--play120',action='store_true',help='승인된 한 차례 실제 조작: 최대120장·30초 전용 앱')
     tone_options = parser.add_mutually_exclusive_group()
     tone_options.add_argument('--shadow-tone',action='store_true',help='중간톤 유지·음영만 짙게 하는 후보')
@@ -287,7 +310,9 @@ def main(argv=None):
     parser.add_argument('--native-conversion',action='store_true',help='검증된 동일 픽셀 C 변환기 사용')
     parser.add_argument('--log-prefix',type=Path,required=True)
     args=parser.parse_args(argv)
-    if not 1 <= args.frames <= (120 if args.play120 else 12): parser.error('--frames 범위 초과')
+    if not 1 <= args.frames <= (6000 if args.interactive else 120 if args.play120 else 12): parser.error('--frames 범위 초과')
+    if args.interactive and (args.play120 or not args.normal_direct13 or args.replay_capture):parser.error('대화형은13주사실제입력 전용')
+    if args.stop_file and not args.interactive:parser.error('--stop-file은대화형전용')
     if args.play120 and (not args.normal_direct13 or args.replay_capture):parser.error('--play120은 13주사 실제 입력 시험 전용')
     if args.normal_direct13 and not args.normal_gap_2ms:parser.error('--normal-direct13은 --normal-gap-2ms 필요')
     if args.normal_gap_2ms and args.quality != 'NORMAL':parser.error('--normal-gap-2ms는 NORMAL 전용')
@@ -325,8 +350,8 @@ def main(argv=None):
         with paths['raw'].open('xb') as raw,paths['tx'].open('xb') as tx:
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,
-                        stop_requested=lambda:stop,frame_reader=reader,first_prefix=args.log_prefix,
-                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair,normal_gap_2ms=args.normal_gap_2ms,normal_direct13=args.normal_direct13,play120=args.play120,
+                        stop_requested=lambda:stop or bool(args.stop_file and args.stop_file.exists()),frame_reader=reader,first_prefix=args.log_prefix,
+                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair,normal_gap_2ms=args.normal_gap_2ms,normal_direct13=args.normal_direct13,play120=args.play120,interactive=args.interactive,
                         lz_encoder=converter.encode_lz if args.native_conversion else encode_lz)
         print('제한 전송 종료: '+metadata['status'])
         return 0
