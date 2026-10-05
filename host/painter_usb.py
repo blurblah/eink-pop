@@ -30,17 +30,19 @@ READY = dict(version='7', panel='untouched', driver='ffeea2a', board='H716',
              quality='NORMAL', gray='4', direct='1', profile='0', packed='1', timing='0', rle='1', lz='1')
 
 
-def packet(kind, session, sequence, payload=b'', version=VERSION, *, play120=False):
-    valid = (version == 8 and kind == START and sequence == 0 and len(payload) == 2 and 1 <= int.from_bytes(payload,"little") <= 6000
-             or version != 8 and kind == START and sequence == 0 and len(payload) == 1 and 1 <= payload[0] <= (120 if play120 and version == 7 else 12)
+def packet(kind, session, sequence, payload=b'', version=VERSION, *, play120=False, room_refresh=False):
+    valid = (version in (8,9) and kind == START and sequence == 0 and len(payload) == 2 and 1 <= int.from_bytes(payload,"little") <= 6000
+             or version not in (8,9) and kind == START and sequence == 0 and len(payload) == 1 and 1 <= payload[0] <= (120 if play120 and version == 7 else 12)
              or kind == FRAME and sequence > 0 and len(payload) == PIXEL_BYTES
              or version >= 5 and kind == PATCH and sequence > 1 and len(payload) < PIXEL_BYTES
              or version >= 6 and kind == RLE and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
              or version >= 7 and kind == LZ and sequence > 0 and 0 < len(payload) < PIXEL_BYTES
              or kind == STOP and sequence > 0 and not payload)
-    if version not in (4,5,6,7,8) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
+    if room_refresh and (version != 9 or kind not in (FRAME,PATCH,RLE,LZ) or sequence <= 1):
+        raise TransferError("방 정리 플래그 범위 오류")
+    if version not in (4,5,6,7,8,9) or not valid or not 1 <= session <= 0xffffffff or not 0 <= sequence <= 0xffffffff:
         raise TransferError('패킷 종류·세션·순서·길이 오류')
-    body = HEADER.pack(b'EPK1', version, kind, 0, session, sequence, len(payload)) + payload
+    body = HEADER.pack(b'EPK1', version, kind, int(room_refresh), session, sequence, len(payload)) + payload
     return body + struct.pack('<I', zlib.crc32(body) & 0xffffffff)
 
 
@@ -52,11 +54,14 @@ def read_frame(path, converter=convert):
             stat = os.fstat(source.fileno())
     except OSError as error:
         raise TransferError(f'PPM 읽기 실패: {type(error).__name__}') from error
-    match = re.match(rb'P6\n# eink sequence ([1-9][0-9]{0,19})\n320 200\n255\n', raw)
+    match = re.match(rb'P6\n# eink sequence ([1-9][0-9]{0,19})\n(?:# eink scene ([0-9]{1,2}) ([0-9]{1,2})\n)?320 200\n255\n', raw)
     if not match or match.end() > 128 or len(raw) != match.end() + 192000:
         raise TransferError('PPM 헤더·해상도·길이 오류')
+    scene = tuple(map(int,match.group(2,3))) if match.group(2) is not None else None
+    if scene is not None and not (0 <= scene[0] <= 15 and 1 <= scene[1] <= 24):
+        raise TransferError("PPM 방 메타데이터 범위 오류")
     payload = converter(raw[match.end():])
-    return raw, payload, dict(source_sequence=int(match.group(1)),
+    return raw, payload, dict(source_sequence=int(match.group(1)), scene=scene,
         read_started_monotonic=started, read_finished_monotonic=time.monotonic(),
         file_mtime_ns=stat.st_mtime_ns, file_bytes=stat.st_size,
         ppm_sha256=hashlib.sha256(raw).hexdigest(), bitmap_sha256=hashlib.sha256(payload).hexdigest(),
@@ -86,7 +91,7 @@ def capture_reader(directory, start, count, converter=convert):
 
 def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=None,
                 stop_requested=lambda: False, frame_reader=read_frame, after_done=10.0,
-                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0, lz_encoder=encode_lz, normal_gap_2ms=False, normal_direct13=False, play120=False, interactive=False):
+                first_prefix=None, timing_diagnostics=False, quality='NORMAL', white_pair=False, black_pair=0, lz_encoder=encode_lz, normal_gap_2ms=False, normal_direct13=False, play120=False, interactive=False, room_refresh=False):
     if not 1 <= frames <= (6000 if interactive else 120 if play120 else 12) or not 1 <= session <= 0xffffffff:
         raise TransferError('세션·프레임 범위 오류')
     if quality not in ('NORMAL','FAST'):raise TransferError('지원하지 않는 화질 모드')
@@ -97,10 +102,13 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     if normal_direct13 and not normal_gap_2ms:raise TransferError('13주사 시험은 NORMAL 2ms 설정 필요')
     if play120 and not normal_direct13:raise TransferError('120장 시험은 NORMAL 2ms 13주사 설정 필요')
     if interactive and (play120 or not normal_direct13):raise TransferError('대화형 시험은 13주사2ms 전용이며 PLAY120과 함께 사용 불가')
-    protocol = 8 if interactive else VERSION
+    if room_refresh and not interactive:raise TransferError("방 정리는 대화형 전용")
+    protocol = 9 if room_refresh else 8 if interactive else VERSION
+    previous_scene = None
     limit_seconds = 600 if interactive else 30
     # 프레임당 TIMING/ACK 두 줄과 제어·주기 정리 여유. 세션은 여전히6000장 제한.
-    log_limits = dict(max_events=12128, max_raw=12128 * 514) if interactive else {}
+    event_limit = 18128 if room_refresh else 12128
+    log_limits = dict(max_events=event_limit, max_raw=event_limit * 514) if interactive else {}
     io = SerialIO(fd, raw_log, tx_log, metadata, **log_limits)
     expected_ready = {**READY,'timing':str(int(timing_diagnostics)),'quality':quality}
     if white_pair:expected_ready['white']='pair2' if white_pair==2 else 'pair'
@@ -108,7 +116,9 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     if normal_gap_2ms:expected_ready['normal_gap_us']='2000'
     if normal_direct13:expected_ready['normal_direct']='13'
     if play120:expected_ready['play_max']='120'
-    if interactive:expected_ready.update(version='8',play_max='6000',screen_limit_ms='600000',refresh_ms='30000')
+    if interactive:expected_ready.update(version=str(protocol),play_max='6000',screen_limit_ms='600000',refresh_ms='30000')
+    if room_refresh:expected_ready['room_refresh']='1'
+    metadata['room_refresh'] = room_refresh
     metadata.update(status='진행 중', started_at=stamp(), session=session, max_frames=frames,
                     protocol_version=protocol, bpp=2, timing_diagnostics=timing_diagnostics, quality=quality,
                     white_pair=white_pair, black_pair=black_pair, normal_gap_2ms=normal_gap_2ms, normal_direct13=normal_direct13, play120=play120, interactive=interactive, frames=[], start_packets_sent=0, stop_packets_sent=0)
@@ -219,6 +229,13 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             with Path(str(first_prefix)+'-first.ppm').open('xb') as f: f.write(raw)
             with Path(str(first_prefix)+'-first.pgm').open('xb') as f:
                 f.write(b'P5\n320 200\n255\n'+bytes(255-v*85 for v in unpack(payload)))
+        scene = info.get("scene")
+        if room_refresh and (not isinstance(scene,(tuple,list)) or len(scene)!=2 or
+                any(type(v) is not int for v in scene) or not 0<=scene[0]<=15 or not 1<=scene[1]<=24):
+            raise TransferError("방 정리에 필요한 레벨/방 메타데이터 없음 또는 오류")
+        scene = tuple(scene) if room_refresh else None
+        room_changed = room_refresh and count > 0 and scene != previous_scene
+        info["room_refresh_requested"] = room_changed
         expected_changed = payload != previous_payload
         encoded = encode_patch(previous_payload,payload) if count else None
         kind = FRAME if encoded is None else PATCH
@@ -229,7 +246,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             compressed = lz_encoder(payload)
             if compressed is not None and len(compressed) < (len(payload) if encoded is None else len(encoded)):
                 kind, encoded = LZ, compressed
-        wire = packet(kind,session,count+1,payload if encoded is None else encoded,version=protocol)
+        wire = packet(kind,session,count+1,payload if encoded is None else encoded,version=protocol,room_refresh=room_changed)
         crc = struct.unpack('<I',wire[-4:])[0]
         info.update(sequence=count+1,crc=f'{crc:08x}',packet_type=kind,wire_payload_bytes=len(wire)-24)
         metadata['frames'].append(info)
@@ -239,11 +256,18 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             if v.get('reason') != 'time_limit': raise TransferError('ACK 없는 종료')
             return finish(v,event)
         refreshed = marker == 'PAINTER_USB_REFRESH'
+        if room_changed and not refreshed:raise TransferError('요청한 방 정리 누락')
         if refreshed:
             if not interactive or count == 0:raise TransferError('요청하지 않은 주기 정리')
-            exact(v,'session seq');same_session(v)
+            exact(v,'session seq reason' if room_refresh else 'session seq');same_session(v)
             if unsigned(v,'seq') != count+1:raise TransferError('정리 순서 오류')
-            info['periodic_refresh'] = event
+            if room_refresh:
+                reason=v['reason']
+                if reason not in (('room','both') if room_changed else ('periodic',)):
+                    raise TransferError('정리 원인 불일치')
+                info['refresh']={**v,**event}
+                if reason in ('periodic','both'):info['periodic_refresh']=event
+            else:info['periodic_refresh'] = event
             expected_changed = payload != bytes(PIXEL_BYTES)
             marker,v,event=response(time.monotonic()+10)
             if marker == 'PAINTER_USB_DONE':
@@ -279,6 +303,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
         if v['result']=='unchanged' and any(times[k] for k in ('clear_us','prepare_us','paint_us','cycles')):
             raise TransferError('무변경 화면의 구동 감지')
         info['ack'] = {**v,**event}
+        previous_scene = scene
         previous_payload = payload
         last_elapsed = times['elapsed_us']
         count += 1
@@ -303,6 +328,7 @@ def main(argv=None):
     parser.add_argument('--normal-gap-2ms',action='store_true',help='NORMAL 2ms 간격 제한 시험 앱 전용')
     parser.add_argument('--normal-direct13',action='store_true',help='NORMAL 2ms 직접 전이13주사 제한 시험 앱 전용')
     parser.add_argument('--interactive',action='store_true',help='사용자중단/최대10분6000장·주기정리 전용 앱')
+    parser.add_argument('--room-refresh',action='store_true',help='v9: 완성 화면의 레벨/방 변경 시 한 번 정리')
     parser.add_argument('--stop-file',type=Path,help='파일 생성 시 정상 STOP 요청')
     parser.add_argument('--play120',action='store_true',help='승인된 한 차례 실제 조작: 최대120장·30초 전용 앱')
     tone_options = parser.add_mutually_exclusive_group()
@@ -314,6 +340,7 @@ def main(argv=None):
     args=parser.parse_args(argv)
     if not 1 <= args.frames <= (6000 if args.interactive else 120 if args.play120 else 12): parser.error('--frames 범위 초과')
     if args.interactive and (args.play120 or not args.normal_direct13 or args.replay_capture):parser.error('대화형은13주사실제입력 전용')
+    if args.room_refresh and not args.interactive:parser.error('--room-refresh는 대화형 전용')
     if args.stop_file and not args.interactive:parser.error('--stop-file은대화형전용')
     if args.play120 and (not args.normal_direct13 or args.replay_capture):parser.error('--play120은 13주사 실제 입력 시험 전용')
     if args.normal_direct13 and not args.normal_gap_2ms:parser.error('--normal-direct13은 --normal-gap-2ms 필요')
@@ -353,7 +380,7 @@ def main(argv=None):
             fd=open_serial(args.port)
             run_session(fd,args.frame_path,args.frames,secrets.randbelow(0xffffffff)+1,metadata,raw,tx,
                         stop_requested=lambda:stop or bool(args.stop_file and args.stop_file.exists()),frame_reader=reader,first_prefix=args.log_prefix,
-                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair,normal_gap_2ms=args.normal_gap_2ms,normal_direct13=args.normal_direct13,play120=args.play120,interactive=args.interactive,
+                        timing_diagnostics=args.timing_diagnostics,quality=args.quality,white_pair=args.white_pair,black_pair=args.black_pair,normal_gap_2ms=args.normal_gap_2ms,normal_direct13=args.normal_direct13,play120=args.play120,interactive=args.interactive,room_refresh=args.room_refresh,
                         lz_encoder=converter.encode_lz if args.native_conversion else encode_lz)
         print('제한 전송 종료: '+metadata['status'])
         return 0

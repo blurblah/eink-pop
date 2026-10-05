@@ -39,9 +39,17 @@
 #if defined(PAINTER_USB_INTERACTIVE) && (!defined(PAINTER_USB_NORMAL_DIRECT13) || defined(PAINTER_USB_PLAY120))
 #error "대화형 시험은 13주사2ms 전용이며 PLAY120과 함께 사용하지 않습니다."
 #endif
+#if defined(PAINTER_USB_ROOM_REFRESH) && !defined(PAINTER_USB_INTERACTIVE)
+#error "방 전환 정리는 대화형 전용입니다."
+#endif
 #ifdef PAINTER_USB_INTERACTIVE
+#ifdef PAINTER_USB_ROOM_REFRESH
+#define WIRE_VERSION_TEXT "9"
+static constexpr uint8_t WIRE_VERSION = 9, START_BYTES = 2;
+#else
 #define WIRE_VERSION_TEXT "8"
 static constexpr uint8_t WIRE_VERSION = 8, START_BYTES = 2;
+#endif
 static constexpr uint32_t MAX_SESSION_FRAMES = 6000;
 static constexpr int64_t SCREEN_LIMIT_US = 600000000, REFRESH_US = 30000000;
 #elif defined(PAINTER_USB_PLAY120)
@@ -180,6 +188,9 @@ static void ready()
 #ifdef PAINTER_USB_INTERACTIVE
                    " play_max=6000 screen_limit_ms=600000 refresh_ms=30000"
 #endif
+#ifdef PAINTER_USB_ROOM_REFRESH
+                   " room_refresh=1"
+#endif
                    " rle=1 lz=1");
     lastReadyMs = millis();
 }
@@ -201,7 +212,12 @@ static bool checkLimits()
 
 static bool validateHeader()
 {
-    if (memcmp(header, "EPK1", 4) != 0 || header[4] != WIRE_VERSION || header[6] || header[7]) {
+    bool validFlags = header[6] == 0 && header[7] == 0;
+#ifdef PAINTER_USB_ROOM_REFRESH
+    validFlags = validFlags || (header[6] == 1 && header[7] == 0 &&
+        (header[5] == 2 || header[5] == 4 || header[5] == 5 || header[5] == 6) && readLe32(header + 12) > 1);
+#endif
+    if (memcmp(header, "EPK1", 4) != 0 || header[4] != WIRE_VERSION || !validFlags) {
         fail("header");
         return false;
     }
@@ -291,7 +307,7 @@ static EPD_Painter::Rect expandFrame()
             (int16_t)((right - left + 1) * 8), (int16_t)((bottom - top + 1) * 2)};
 }
 
-static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, int64_t decodeUs)
+static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, int64_t decodeUs, bool roomRefresh = false)
 {
     if (!checkLimits()) return;
     const int64_t displayStart = esp_timer_get_time();
@@ -320,8 +336,14 @@ static void displayFrame(uint32_t sequence, uint32_t packetCrc, int64_t rxUs, in
     }
 #ifdef PAINTER_USB_INTERACTIVE
     if (firstFrame) lastRefresh = esp_timer_get_time();
-    else if (esp_timer_get_time() - lastRefresh >= REFRESH_US) {
+    else if (roomRefresh || esp_timer_get_time() - lastRefresh >= REFRESH_US) {
+#ifdef PAINTER_USB_ROOM_REFRESH
+        const bool periodic = esp_timer_get_time() - lastRefresh >= REFRESH_US;
+        Serial.printf("PAINTER_USB_REFRESH session=%lu seq=%lu reason=%s\r\n", (unsigned long)session, (unsigned long)sequence,
+                      roomRefresh ? (periodic ? "both" : "room") : "periodic");
+#else
         Serial.printf("PAINTER_USB_REFRESH session=%lu seq=%lu\r\n", (unsigned long)session, (unsigned long)sequence);
+#endif
         const int64_t started = esp_timer_get_time();
         panel.clear();
         if (!panel.waitForIdle(WAIT_MS)) { fail("clear_timeout"); return; }
@@ -431,10 +453,11 @@ static void completePacket()
     if (type == 5 && !decodeRle()) { fail("rle"); return; }
     if (type == 6 && decode_painter_lz(encoded, payloadLength, incoming, SOURCE_BYTES) != 0) { fail("lz"); return; }
     const int64_t decodeUs = (type == 4 || type == 5 || type == 6) ? esp_timer_get_time() - decodeStart : 0;
+    const bool roomRefresh = header[6] == 1;
     resetPacket();
     if (type == 1) beginSession(id);
     else if (type == 3) finish("stop");
-    else displayFrame(sequence, packetCrc, rxUs, decodeUs);
+    else displayFrame(sequence, packetCrc, rxUs, decodeUs, roomRefresh);
 }
 
 static size_t readChunk(uint8_t *destination, size_t remaining, int available)
