@@ -14,3 +14,8 @@ __pycache__/
 secrets.*
 credentials.*
 .DS_Store
+
+# 각각 독립적으로 clone하고 개발하는 저장소
+/repos/SDLPoP/
+/repos/EPD_Painter/
+/repos/LilyGo-EPD47/

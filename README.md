@@ -71,7 +71,20 @@ USB 화면 전송은 이 프로젝트의 전용 게임 추출기·호스트 프�
 | 실제16계조 게임 한 장 | 1회 처리·종료와 사용자 관찰 완료. 생명 화살표는 거의 안 보이고 나머지는 양호. 그림534.942ms, 전체 지우기 포함1.897초 |
 | 생명력·중간톤 밝기 보정 | 정지화면 최종판 한 장 처리·정상 종료. 사용자 “밝기가 적당하고 생명력도 잘 보여요” 확인. 실행 중 게임의 최신프레임 자동변환·4bpp 전송에 적용, 실제12장 검증 완료 |
 
-드라이버는 `repos/LilyGo-EPD47`, 게임은 `repos/SDLPoP`에서 개발합니다. 각각 작업 브랜치를 만들고 상위 프로젝트에 submodule로 등록했습니다. SDLPoP의 기존 `<strings.h>` 수정도 새 브랜치에 커밋했으며 `/Users/blurblah/workspace/SDLPoP` 원본은 그대로 보존했습니다. 모든 관련 변경은 로컬 커밋으로 남기고 push하지 않습니다.
+드라이버는 `repos/LilyGo-EPD47`와 `repos/EPD_Painter`, 게임은 `repos/SDLPoP`에서 각각 독립 Git 저장소로 개발합니다. 상위 저장소는 세 경로를 추적하지 않으며 submodule을 사용하지 않습니다. 각 fork의 작업 브랜치는 `eink-pop`입니다. 기존 `/Users/blurblah/workspace/SDLPoP` 원본은 그대로 보존합니다.
+
+새 환경에서는 다음처럼 각각 받습니다. 빌드에 필요한 도구 설치는 별도입니다.
+
+```sh
+git clone https://github.com/blurblah/eink-pop.git
+cd eink-pop
+mkdir -p repos
+git clone -b eink-pop https://github.com/blurblah/SDLPoP.git repos/SDLPoP
+git clone -b eink-pop https://github.com/blurblah/EPD_Painter.git repos/EPD_Painter
+git clone -b eink-pop https://github.com/blurblah/LilyGo-EPD47.git repos/LilyGo-EPD47
+```
+
+각 브랜치의 최신 코드를 받는 명령입니다. 함께 검증한 정확한 커밋과 개발·push 방법은 [저장소 구성](docs/저장소-구성과-작업-브랜치.md)을 따릅니다.
 
 ## 다음 작업
 
@@ -83,4 +96,4 @@ USB 화면 전송은 이 프로젝트의 전용 게임 추출기·호스트 프�
 
 ## 초기화 범위
 
-상위 Git 저장소와 두 하위 저장소를 관리합니다. 코어·도구·빌드는 `.local/`, 백업·원본 로그는 `artifacts/`에 두며 Git에서 제외합니다. 앞으로 수정하는 드라이버는 `repos/`에서 추적합니다. 기존 전역 Arduino 환경과 별도 SDLPoP 원본은 보존합니다.
+상위 Git 저장소와 세 독립 저장소를 관리합니다. 코어·도구·빌드는 `.local/`, 백업·원본 로그는 `artifacts/`에 두며 Git에서 제외합니다. 드라이버와 게임은 `repos/` 안의 각 저장소에서만 추적합니다. 기존 전역 Arduino 환경과 별도 SDLPoP 원본은 보존합니다.
