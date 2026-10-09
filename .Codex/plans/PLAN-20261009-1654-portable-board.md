@@ -113,6 +113,19 @@ TW555075는 Aside에서 확인한 [첨부 데이터시트](https://www.devicemar
 
 조회 말미 계정 잔여83% 확인. Aside 조사 응답은300초 제한으로 중단됐지만 동일 세션의 결과를 공식 세션 조회 API로 회수했다. 각 조사 작업은 새 탭 종료를 보고했으며 전체 탭 목록에 기존 LILYGO 관련3개만 남은 것을 확인했다.
 
+## 실행보드 재고 재조사 — 2026-10-09
+
+사용자는 품절 상품 대신 구매 가능한 Zero 2 W 또는 대체 모델 선정을 요청했다. 보유 구형 Raspberry Pi 모델은 아직 미확인이다. 이번 조사 시작 시 계정 잔여81%, Git 변경 없음 확인. 장치 접근과 구매 없이 Aside 단일 에이전트로 상품 옵션을 조회했다.
+
+- Zero 2 W 추가 확인: 메카솔루션33,000원은 구매 불가, 아이씨뱅큐35,750원은 납기미정·견적 요청, Pimoroni와 The Pi Hut는 기본/헤더형 모두 품절, Waveshare는 Out of Stock. 이전 국내 품절 후보를 구매 권장으로 유지하지 않는다.
+- **현재 재고 우선 후보:** [Arace Radxa ZERO 3W](https://arace.tech/products/radxa-zero-3w), **2GB RAM / eMMC 없음 / 헤더 납땜형**, SKU `RS107-D2E0H1W15`. Aside 옵션 선택 화면에서 **55,000원, In stock, Add to Cart 활성**, 예약주문 표시 없음 확인. 1GB·4GB·8GB 선택은 비활성이다. 재고 표시는 조회 시점 상태로 출하 보장이 아니다.
+- 한국 개별 배송 가능 여부·배송비·세금 포함 최종 금액은 미확인이다. 판매처는 전세계 대부분 주소 배송을 안내하나 체크아웃을 진행하지 않았다. 배송비 확인을 조건으로 추천하며 주문 완료 가능성을 확정하지 않는다.
+- Arace는 [Radxa 공식 유통사 목록](https://wiki.radxa.com/Distributors)에 포함된다. [공식 ZERO 3 문서](https://docs.radxa.com/en/zero/zero3)는 RK3566 Cortex-A55 4코어,65×30mm,USB-C 호스트와 별도 OTG/급전 포트,Debian 기반 Radxa OS를 안내한다. 성능과 Linux 지원에 따라 PoP 실행부로 적절한 후보라고 판단하나 현재 수정본의 빌드·성능·USB 동작은 미검증이다.
+- 변경 영향: Raspberry Pi OS 대신 Radxa OS, GPIO 번호·입력 설정과 I2S 오디오 설정 재검토, microUSB OTG 대신 USB-C 호스트 연결, 전원 확장보드 호환성 재검토가 필요하다. PiSugar와 Raspberry Pi용 HAT를 직접 호환한다고 가정하지 않는다. 소비전력·발열·2시간 배터리는 새 보드에서 실측해야 한다. 보드 선정만으로 구현 승인을 간주하지 않는다.
+- [AliExpress Radxa 판매 후보](https://ko.aliexpress.com/item/1005007392747083.html)는 저용량 옵션 품절,8GB/64GB는213,600원(신규208,071원)에11/30 발송 예약주문으로 제외했다.
+- 보유 구형 Pi: Pi 2·3이면 SDLPoP Linux 빌드·물리 버튼·USB 전송의 탁상 시제품에 활용할 합리적 후보이다. [Pi 2 공식](https://www.raspberrypi.com/products/raspberry-pi-2-model-b/)과 [Pi 3 공식](https://www.raspberrypi.com/products/raspberry-pi-3-model-b/)의4코어·1GB RAM·USB·GPIO 사양에 근거한 판단이며 실제 실행 보장은 아니다. Pi 1·원래 Zero 계열은 별도 성능 검증이 필요하다. 탁상 시험 결과를 소형 최종 보드의 전력·성능 검증으로 대신하지 않는다.
+- 이번 조사 신규 탭7개는 각 단계에서 모두 닫았고, 기존 LILYGO3개만 보존됨을 Aside에서 확인했다. 구매·장바구니·판매자 메시지·계정설정 변경 없음.
+
 ## 위험 및 롤백
 
 - 조사 단계 위험은 오래된 worktree 상태를 최신으로 오인하는 것이다. 원본 인계와 확인일을 명시한다.
