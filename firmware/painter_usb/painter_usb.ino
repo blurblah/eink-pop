@@ -36,8 +36,8 @@
 #if defined(PAINTER_USB_PLAY120) && !defined(PAINTER_USB_NORMAL_DIRECT13)
 #error "120장 시험은 NORMAL 2ms 13주사 설정이 필요합니다."
 #endif
-#if defined(PAINTER_USB_INTERACTIVE) && (!defined(PAINTER_USB_NORMAL_DIRECT13) || defined(PAINTER_USB_PLAY120))
-#error "대화형 시험은 13주사2ms 전용이며 PLAY120과 함께 사용하지 않습니다."
+#if defined(PAINTER_USB_INTERACTIVE) && (!defined(PAINTER_USB_NORMAL_GAP_2MS) || defined(PAINTER_USB_PLAY120))
+#error "대화형 시험은 NORMAL 2ms 전용이며 PLAY120과 함께 사용하지 않습니다."
 #endif
 #if defined(PAINTER_USB_ROOM_REFRESH) && !defined(PAINTER_USB_INTERACTIVE)
 #error "방 전환 정리는 대화형 전용입니다."

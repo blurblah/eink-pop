@@ -16,6 +16,13 @@ int main(int argc,char**argv){
  assert(argc==2);scenario=argv[1];setup();
  assert(Serial.output.find("version=8")!=std::string::npos);
  assert(Serial.output.find("play_max=6000 screen_limit_ms=600000 refresh_ms=30000")!=std::string::npos);
+ #ifdef PAINTER_USB_NORMAL_DIRECT13
+ assert(Serial.output.find("normal_direct=13")!=std::string::npos);
+ assert(gapTrialConfig.trains.dir_normal != nullptr);
+#else
+ assert(Serial.output.find("normal_direct=13")==std::string::npos);
+ assert(gapTrialConfig.trains.dir_normal == nullptr);
+#endif
  int n=scenario=="zero"?0:scenario=="over"?6001:6000;
  auto start=make(1,0,{uint8_t(n&255),uint8_t(n>>8)},scenario=="version"?7:8);
  if(scenario=="short")start=make(1,0,{12});
@@ -50,16 +57,19 @@ int main(int argc,char**argv){
  auto old=Serial.output;feed(start);loop();assert(Serial.output==old);
 }
 '''
-def main():
+def main(direct13=True):
  with tempfile.TemporaryDirectory() as d:
   p=Path(d);(p/'Arduino.h').write_text(base.ARDUINO);(p/'EPD_Painter.h').write_text(base.EPD)
   (p/'esp_heap_caps.h').write_text('#include <cstddef>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\nvoid* heap_caps_malloc(size_t,int);void heap_caps_free(void*);\n')
   (p/'esp_timer.h').write_text('#include <cstdint>\nint64_t esp_timer_get_time();\n')
   (p/'esp32s3').mkdir();(p/'esp32s3/spiram.h').write_text('#include <cstddef>\nsize_t esp_spiram_get_size();\n')
   (p/'check.cpp').write_text(prefix+MAIN)
-  flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING','-DPAINTER_USB_NORMAL_GAP_2MS','-DPAINTER_USB_NORMAL_DIRECT13','-DPAINTER_USB_INTERACTIVE']
+  flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING','-DPAINTER_USB_NORMAL_GAP_2MS','-DPAINTER_USB_INTERACTIVE']
+  if direct13:flags.append('-DPAINTER_USB_NORMAL_DIRECT13')
   subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-I',d,*flags,f'-DSKETCH_PATH="{base.ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
   cases=('zero','over','version','short','stop_before','stop','full','timeout','rx_timeout','refresh','refresh_white')
   for case in cases:subprocess.run([str(p/'check'),case],check=True,timeout=40)
   print('실제 v8 스케치 11사례·6000장/6001거부·600초/수신상한·정리 후 재표시/흰색·STOP/OFF 통과')
-if __name__=='__main__':main()
+if __name__=='__main__':
+ for direct13 in (True,False):
+  print('주사 옵션:',13 if direct13 else 19,flush=True);main(direct13)

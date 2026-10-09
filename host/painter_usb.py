@@ -102,7 +102,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     if normal_gap_2ms and quality != 'NORMAL':raise TransferError('2ms 간격 시험은 NORMAL 전용')
     if normal_direct13 and not normal_gap_2ms:raise TransferError('13주사 시험은 NORMAL 2ms 설정 필요')
     if play120 and not normal_direct13:raise TransferError('120장 시험은 NORMAL 2ms 13주사 설정 필요')
-    if interactive and (play120 or not normal_direct13):raise TransferError('대화형 시험은 13주사2ms 전용이며 PLAY120과 함께 사용 불가')
+    if interactive and (play120 or not normal_gap_2ms):raise TransferError('대화형 시험은 NORMAL 2ms 전용이며 PLAY120과 함께 사용 불가')
     if room_refresh and not interactive:raise TransferError("방 정리는 대화형 전용")
     protocol = 9 if room_refresh else 8 if interactive else VERSION
     previous_scene = None
@@ -354,7 +354,7 @@ def main(argv=None):
     parser.add_argument('--log-prefix',type=Path,required=True)
     args=parser.parse_args(argv)
     if not 1 <= args.frames <= (6000 if args.interactive else 120 if args.play120 else 12): parser.error('--frames 범위 초과')
-    if args.interactive and (args.play120 or not args.normal_direct13 or args.replay_capture):parser.error('대화형은13주사실제입력 전용')
+    if args.interactive and (args.play120 or not args.normal_gap_2ms or args.replay_capture):parser.error('대화형은 NORMAL 2ms 실제입력 전용')
     if args.room_refresh and not args.interactive:parser.error('--room-refresh는 대화형 전용')
     if args.stop_file and not args.interactive:parser.error('--stop-file은대화형전용')
     if args.play120 and (not args.normal_direct13 or args.replay_capture):parser.error('--play120은 13주사 실제 입력 시험 전용')

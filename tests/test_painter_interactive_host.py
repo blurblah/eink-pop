@@ -8,9 +8,11 @@ import usb_frame as usb
 from test_painter_usb_host import Peer
 
 class InteractivePeer(Peer):
- def __init__(self,refresh=False,white=False,timeout=False):
+ def __init__(self,refresh=False,white=False,timeout=False,direct13=True):
   super().__init__(diagnostics=True);self.refresh=refresh;self.white=white;self.timeout=timeout
+  self.direct13=direct13
   self.queue=[self.queue[0].replace('version=7','version=8')+' normal_gap_us=2000 normal_direct=13 play_max=6000 screen_limit_ms=600000 refresh_ms=30000']
+  if not direct13:self.queue[0]=self.queue[0].replace(' normal_direct=13','')
  def write_all(self,wire,deadline):
   self.sent.append(wire);_,v,k,_,session,seq,n=p.HEADER.unpack(wire[:20]);data=wire[20:-4]
   assert v==8 and wire==p.packet(k,session,seq,data,version=8)
@@ -26,20 +28,20 @@ class InteractivePeer(Peer):
    if refresh:self.emit('REFRESH',dict(session=session,seq=seq));self.previous=bytes(16000)
    changed=data!=self.previous;applied=self.n==1 or refresh or changed;self.applied+=applied
    self.previous=data
-   if changed:self.emit('TIMING',dict(session=session,seq=seq,cycle=self.n,passes=13,discovery_us=10,rowloop_us=40,settle_us=30,neutral_us=10,total_us=100))
+   if changed:self.emit('TIMING',dict(session=session,seq=seq,cycle=self.n,passes=13 if self.direct13 else 19,discovery_us=10,rowloop_us=40,settle_us=30,neutral_us=10,total_us=100))
    self.emit('ACK',dict(session=session,seq=seq,crc=f'{zlib.crc32(wire[:-4])&0xffffffff:08x}',result='applied' if applied else 'unchanged',rx_us=100,decode_us=0,display_us=400,clear_us=100 if self.n==1 or refresh else 0,prepare_us=10 if changed else 0,paint_us=200 if changed else 0,cycles=int(changed),elapsed_us=600000000 if self.timeout else self.n*400))
    if self.timeout or self.n==self.total:self.emit('DONE',dict(session=session,reason='time_limit' if self.timeout else 'limit',frames=self.n,applied=self.applied,poweroff_returned=1))
   return dict(bytes=len(wire),bytes_written=len(wire),send_started_monotonic=time.monotonic())
 
 class Tests(unittest.TestCase):
- def run_peer(self,peer,frames=2,stop=False):
+ def run_peer(self,peer,frames=2,stop=False,direct13=True):
   reads=0
   def reader(_):
    nonlocal reads
    reads+=1;data=bytes(16000) if peer.white and reads==2 else b'\x55'*16000
    return b'raw',data,dict(source_sequence=reads)
   with patch.object(p,'SerialIO',return_value=peer) as factory:
-   result=p.run_session(-1,'unused',frames,123,{},frame_reader=reader,after_done=0,timing_diagnostics=True,normal_gap_2ms=True,normal_direct13=True,interactive=True,stop_requested=lambda:stop and peer.n==1)
+   result=p.run_session(-1,'unused',frames,123,{},frame_reader=reader,after_done=0,timing_diagnostics=True,normal_gap_2ms=True,normal_direct13=direct13,interactive=True,stop_requested=lambda:stop and peer.n==1)
   self.assertEqual(factory.call_args.kwargs,dict(max_events=12128,max_raw=12128*514))
   return result
  def test_refresh_same_and_white(self):
@@ -49,6 +51,14 @@ class Tests(unittest.TestCase):
  def test_stop_and_time_limit(self):
   self.assertEqual(self.run_peer(InteractivePeer(),frames=6000,stop=True)['done']['reason'],'stop')
   self.assertEqual(self.run_peer(InteractivePeer(timeout=True),frames=6000)['done']['reason'],'time_limit')
+ def test_original_19_passes(self):
+  result=self.run_peer(InteractivePeer(white=True,direct13=False),direct13=False)
+  self.assertTrue(all(f['driver_timing']['passes']==19 for f in result['frames']))
+  with self.assertRaisesRegex(p.TransferError,'READY'):
+   self.run_peer(InteractivePeer(white=True,direct13=False),direct13=True)
+  for kwargs in ({},dict(normal_gap_2ms=True,play120=True),dict(normal_gap_2ms=True,quality='FAST')):
+   with self.assertRaises(p.TransferError):
+    p.run_session(-1,'unused',2,123,{},interactive=True,**kwargs)
  def test_bounds_and_identity(self):
   for n in (0,6001):
    with self.assertRaises(p.TransferError):p.packet(p.START,123,0,n.to_bytes(2,'little'),version=8)
