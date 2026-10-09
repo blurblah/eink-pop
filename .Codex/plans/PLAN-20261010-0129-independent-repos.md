@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 | --- | --- |
 | 생성일 | 2026-10-10 01:29 KST |
-| 상태 | 실행 중 |
+| 상태 | 완료 |
 | 승인 | 사용자: “각각 분리한 후 push 해줘. 로컬에도 submodule처럼 되어있다면 잘 분리하고” |
 | 위험도 | 중간 — Git 메타데이터·원격 브랜치 변경 |
 
@@ -20,8 +20,8 @@
 - [x] 1. 각 저장소의 HEAD·refs·상태·작업 파일 해시 및 Git 메타데이터를 보존한다.
 - [x] 2. `.git` 파일을 자체 `.git` 디렉터리로 전환한다. 외부 객체 의존성 없음, 전후 파일·커밋 일치, fsck 확인.
 - [x] 3. 세 개인 fork의 eink-pop 브랜치를 push하고 원격 SHA를 대조한 후 기존 codex/eink-pop 브랜치를 제거한다.
-- [ ] 4. 상위 gitlink 제거·추적 제외·문서 수정 후 커밋한다. 원본 작업 공간을 fast-forward하고 main push.
-- [ ] 5. 일반 clone과 개별 clone으로 복원 검증. 로컬 상태·원격 SHA·독립 Git 경로 확인.
+- [x] 4. 상위 gitlink 제거·추적 제외·문서 수정 후 커밋한다. 원본 작업 공간을 fast-forward하고 main push.
+- [x] 5. 일반 clone과 개별 clone으로 복원 검증. 로컬 상태·원격 SHA·독립 Git 경로 확인.
 
 ## 위험과 복구
 
@@ -38,3 +38,8 @@
 - 세 로컬 작업 브랜치 이름 eink-pop, 개인 fork origin과 공식 upstream 설정 완료. 남아 있던 제조사 과거 작업 브랜치도 커밋을 유지하며 codex 접두사 제거.
 - 상위 Git 인덱스에 repos 아래 항목이 없고 각 저장소의 대표 파일이 ignore되는 것을 확인. 호스트·펌웨어·테스트 코드는 수정하지 않았다.
 - 현재 사용자가 알려준 추론 수준은 medium이며 이 작업에 충분하다고 안내했다. 변경 권장이 필요하면 작업 전에 이유와 함께 안내한다.
+- 전환 커밋 `7a44894`를 원본 작업 공간에 fast-forward하고 브랜치를 main으로 변경, 개인 origin/main push 성공. 이 작업 공간은 portable-board-plan 브랜치다. 상위 submodule 설정 섹션도 제거했다.
+- 최종 원본 파일 대조: SDLPoP 1167개, EPD_Painter 113개, LilyGo-EPD47 166개가 모두 전환 전과 동일했다. 각 자체 .git 디렉터리·HEAD·깨끗한 상태·빈 superproject 조회 결과를 확인했다. 상위도 gitlink·.gitmodules가 없고 깨끗하다.
+- 새 eink-pop 원격 브랜치의 SHA 일치 후, 기존 codex/eink-pop은 해당 SHA에 대한 lease를 걸어 제거했다. 최종 원격 조회에서 옛 브랜치가 없는 것을 확인했다.
+- `/private/tmp/eink-pop-independent-check-5ai2qpac/eink-pop`에 GitHub HTTPS URL로 상위와 세 하위 저장소를 각각 일반 clone했다. 하위 SHA 일치, 각 .git 디렉터리, 독립성, 상위의 하위 경로 추적 제외 및 깨끗한 상태 검증을 통과했다.
+- 코드·펌웨어는 변경하지 않았으므로 빌드나 장치 시험은 실행하지 않았다. 검증 범위는 Git 구조·파일 보존·원격 복원이며 Pi 실행은 별도다.
