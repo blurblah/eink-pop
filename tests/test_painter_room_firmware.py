@@ -47,15 +47,18 @@ int main(int argc,char**argv){
  assert(state==TERMINAL&&offs==1&&frees==4);
 }
 '''
-def main():
+def main(direct13=True):
  with tempfile.TemporaryDirectory() as d:
   p=Path(d);(p/'Arduino.h').write_text(base.ARDUINO);(p/'EPD_Painter.h').write_text(base.EPD)
   (p/'esp_heap_caps.h').write_text('#include <cstddef>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\nvoid* heap_caps_malloc(size_t,int);void heap_caps_free(void*);\n')
   (p/'esp_timer.h').write_text('#include <cstdint>\nint64_t esp_timer_get_time();\n');(p/'esp32s3').mkdir();(p/'esp32s3/spiram.h').write_text('#include <cstddef>\nsize_t esp_spiram_get_size();\n')
   (p/'check.cpp').write_text(prefix+MAIN)
-  flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING','-DPAINTER_USB_NORMAL_GAP_2MS','-DPAINTER_USB_NORMAL_DIRECT13','-DPAINTER_USB_INTERACTIVE','-DPAINTER_USB_ROOM_REFRESH']
+  flags=['-DPAINTER_USB_DIAGNOSTICS','-DEPD_PAINTER_CAPTURE_TIMING','-DPAINTER_USB_NORMAL_GAP_2MS','-DPAINTER_USB_INTERACTIVE','-DPAINTER_USB_ROOM_REFRESH']
+  if direct13:flags.append('-DPAINTER_USB_NORMAL_DIRECT13')
   subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-I',d,*flags,f'-DSKETCH_PATH="{base.ROOT/"firmware/painter_usb/painter_usb.ino"}"',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
   cases=('version','start_flag','first_flag','same','room','periodic','both','patch','rle_white','lz','crc','flags','patch_bad','stop_flag')
   for case in cases:subprocess.run([str(p/'check'),case],check=True,timeout=40)
   print(f'실제 v9 스케치 {len(cases)}사례 ASan/UBSan 통과')
-if __name__=='__main__':main()
+if __name__=='__main__':
+ for direct13 in (True,False):
+  print('주사 옵션:',13 if direct13 else 19,flush=True);main(direct13)

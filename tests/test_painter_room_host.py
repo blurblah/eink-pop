@@ -7,8 +7,8 @@ import painter_usb as p
 from usb_frame import TransferError
 
 class RoomPeer(InteractivePeer):
- def __init__(self,periodic=False,omit=False,bad_reason=False):
-  super().__init__();self.periodic=periodic;self.omit=omit;self.bad_reason=bad_reason
+ def __init__(self,periodic=False,omit=False,bad_reason=False,direct13=True):
+  super().__init__(direct13=direct13);self.periodic=periodic;self.omit=omit;self.bad_reason=bad_reason
   self.queue[0]=self.queue[0].replace('version=8','version=9')+' room_refresh=1'
  def write_all(self,wire,deadline):
   self.sent.append(wire);_,v,k,flags,session,seq,n=p.HEADER.unpack(wire[:20]);data=wire[20:-4]
@@ -27,7 +27,7 @@ class RoomPeer(InteractivePeer):
     reason='both' if flags and periodic else 'room' if flags else 'periodic'
     self.emit('REFRESH',dict(session=session,seq=seq,reason='bad' if self.bad_reason else reason));self.previous=bytes(16000)
    changed=data!=self.previous;applied=self.n==1 or refresh or changed;self.applied+=int(applied);self.previous=data
-   if changed:self.emit('TIMING',dict(session=session,seq=seq,cycle=self.n,passes=13,discovery_us=10,rowloop_us=40,settle_us=30,neutral_us=10,total_us=100))
+   if changed:self.emit('TIMING',dict(session=session,seq=seq,cycle=self.n,passes=13 if self.direct13 else 19,discovery_us=10,rowloop_us=40,settle_us=30,neutral_us=10,total_us=100))
    self.emit('ACK',dict(session=session,seq=seq,crc=wire[-4:][::-1].hex(),result='applied' if applied else 'unchanged',rx_us=1,decode_us=int(k!=p.FRAME),display_us=200,clear_us=10 if seq==1 or refresh else 0,prepare_us=int(changed),paint_us=100 if changed else 0,cycles=int(changed),elapsed_us=seq*100))
    if self.n==self.total:self.emit('DONE',dict(session=session,reason='limit',frames=self.n,applied=self.applied,poweroff_returned=1))
   return dict(bytes=len(wire),bytes_written=len(wire),send_started_monotonic=time.monotonic())
@@ -39,7 +39,7 @@ class Tests(unittest.TestCase):
    seq,scene=next(read);data=bytes(16000) if white and seq==2 else b'\x55'*16000
    return b'raw',data,dict(source_sequence=seq*3,scene=scene,scene_kind=modes[seq-1] if modes else 0)
   with patch.object(p,'SerialIO',return_value=peer) as factory:
-   result=p.run_session(-1,'unused',len(scenes),123,{},frame_reader=reader,after_done=0,timing_diagnostics=True,normal_gap_2ms=True,normal_direct13=True,interactive=True,room_refresh=True,stop_requested=lambda:stop and peer.n==2)
+   result=p.run_session(-1,'unused',len(scenes),123,{},frame_reader=reader,after_done=0,timing_diagnostics=True,normal_gap_2ms=True,normal_direct13=peer.direct13,interactive=True,room_refresh=True,stop_requested=lambda:stop and peer.n==2)
   self.assertEqual(factory.call_args.kwargs,dict(max_events=18128,max_raw=18128*514))
   return result,peer
  def test_room_level_revisit_and_unchanged(self):
@@ -60,6 +60,10 @@ class Tests(unittest.TestCase):
  def test_cutscene_entry_and_exit(self):
   result,_=self.run_peer([(1,9),(1,0),(1,0),(2,5)],modes=[0,1,1,0])
   self.assertEqual([f["room_refresh_requested"] for f in result["frames"]],[False,True,False,True])
+ def test_original_19_passes_scene_refresh(self):
+  r,_=self.run_peer([(1,9),(1,0),(2,5)],peer=RoomPeer(direct13=False),modes=[0,1,0])
+  self.assertEqual([f['room_refresh_requested'] for f in r['frames']],[False,True,True])
+  self.assertTrue(all(f['driver_timing']['passes']==19 for f in r['frames']))
  def test_wire_flags_rejected(self):
   for version,kind,seq,data in [(8,p.FRAME,2,bytes(16000)),(9,p.FRAME,1,bytes(16000)),(9,p.STOP,2,b''),(9,p.START,0,b'\x02\x00')]:
    with self.assertRaises(TransferError):p.packet(kind,123,seq,data,version=version,room_refresh=True)
