@@ -33,11 +33,11 @@ class RoomPeer(InteractivePeer):
   return dict(bytes=len(wire),bytes_written=len(wire),send_started_monotonic=time.monotonic())
 
 class Tests(unittest.TestCase):
- def run_peer(self,scenes,peer=None,white=False,stop=False):
+ def run_peer(self,scenes,peer=None,white=False,stop=False,modes=None):
   peer=peer or RoomPeer();read=iter(enumerate(scenes,1))
   def reader(_):
    seq,scene=next(read);data=bytes(16000) if white and seq==2 else b'\x55'*16000
-   return b'raw',data,dict(source_sequence=seq*3,scene=scene)
+   return b'raw',data,dict(source_sequence=seq*3,scene=scene,scene_kind=modes[seq-1] if modes else 0)
   with patch.object(p,'SerialIO',return_value=peer) as factory:
    result=p.run_session(-1,'unused',len(scenes),123,{},frame_reader=reader,after_done=0,timing_diagnostics=True,normal_gap_2ms=True,normal_direct13=True,interactive=True,room_refresh=True,stop_requested=lambda:stop and peer.n==2)
   self.assertEqual(factory.call_args.kwargs,dict(max_events=18128,max_raw=18128*514))
@@ -57,13 +57,16 @@ class Tests(unittest.TestCase):
  def test_missing_metadata_and_refresh_rejected(self):
   for scenes,peer in [([(1,1),None],RoomPeer()), ([(1,25)],RoomPeer()), ([(1,1),(1,2)],RoomPeer(omit=True)), ([(1,1),(1,2)],RoomPeer(bad_reason=True))]:
    with self.assertRaises(TransferError):self.run_peer(scenes,peer)
+ def test_cutscene_entry_and_exit(self):
+  result,_=self.run_peer([(1,9),(1,0),(1,0),(2,5)],modes=[0,1,1,0])
+  self.assertEqual([f["room_refresh_requested"] for f in result["frames"]],[False,True,False,True])
  def test_wire_flags_rejected(self):
   for version,kind,seq,data in [(8,p.FRAME,2,bytes(16000)),(9,p.FRAME,1,bytes(16000)),(9,p.STOP,2,b''),(9,p.START,0,b'\x02\x00')]:
    with self.assertRaises(TransferError):p.packet(kind,123,seq,data,version=version,room_refresh=True)
  def test_ppm_legacy_scene_and_malformed(self):
   with tempfile.TemporaryDirectory() as d:
    path=Path(d)/'latest.ppm'
-   for header,scene in [(b'',None),(b'# eink scene 1 24\n',(1,24)),(b'# eink scene 0 1\n',(0,1))]:
+   for header,scene in [(b'',None),(b'# eink scene 1 24\n',(1,24)),(b'# eink scene 0 1\n',(0,1)),(b'# eink scene 1 0\n# eink mode 1\n',(1,0))]:
     path.write_bytes(b'P6\n# eink sequence 9\n'+header+b'320 200\n255\n'+bytes(192000))
     _,_,info=p.read_frame(path,lambda rgb:bytes(16000));self.assertEqual(info['scene'],scene)
    for header in (b'# eink scene 1 0\n',b'# eink scene 16 1\n',b'# eink scene 1 25\n',b'# eink scene 1\n'):

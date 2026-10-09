@@ -54,14 +54,15 @@ def read_frame(path, converter=convert):
             stat = os.fstat(source.fileno())
     except OSError as error:
         raise TransferError(f'PPM 읽기 실패: {type(error).__name__}') from error
-    match = re.match(rb'P6\n# eink sequence ([1-9][0-9]{0,19})\n(?:# eink scene ([0-9]{1,2}) ([0-9]{1,2})\n)?320 200\n255\n', raw)
+    match = re.match(rb'P6\n# eink sequence ([1-9][0-9]{0,19})\n(?:# eink scene ([0-9]{1,2}) ([0-9]{1,2})\n(?:# eink mode ([01])\n)?)?320 200\n255\n', raw)
     if not match or match.end() > 128 or len(raw) != match.end() + 192000:
         raise TransferError('PPM 헤더·해상도·길이 오류')
     scene = tuple(map(int,match.group(2,3))) if match.group(2) is not None else None
-    if scene is not None and not (0 <= scene[0] <= 15 and 1 <= scene[1] <= 24):
+    scene_kind = int(match.group(4) or 0)
+    if scene is not None and not (0 <= scene[0] <= 15 and (scene[1] == 0 if scene_kind else 1 <= scene[1] <= 24)):
         raise TransferError("PPM 방 메타데이터 범위 오류")
     payload = converter(raw[match.end():])
-    return raw, payload, dict(source_sequence=int(match.group(1)), scene=scene,
+    return raw, payload, dict(source_sequence=int(match.group(1)), scene=scene, scene_kind=scene_kind,
         read_started_monotonic=started, read_finished_monotonic=time.monotonic(),
         file_mtime_ns=stat.st_mtime_ns, file_bytes=stat.st_size,
         ppm_sha256=hashlib.sha256(raw).hexdigest(), bitmap_sha256=hashlib.sha256(payload).hexdigest(),
@@ -105,6 +106,7 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
     if room_refresh and not interactive:raise TransferError("방 정리는 대화형 전용")
     protocol = 9 if room_refresh else 8 if interactive else VERSION
     previous_scene = None
+    source_progress_at = time.monotonic()
     limit_seconds = 600 if interactive else 30
     # 프레임당 TIMING/ACK 두 줄과 제어·주기 정리 여유. 세션은 여전히6000장 제한.
     event_limit = 18128 if room_refresh else 12128
@@ -221,19 +223,32 @@ def run_session(fd, frame_path, frames, session, metadata, raw_log=None, tx_log=
             raw,payload,info = frame_reader(frame_path)
             source_seq = info['source_sequence']
             if source_seq < last_source: raise TransferError('원본 게임 번호 역행')
-            if source_seq > last_source: break
-            if time.monotonic() >= fresh_until: raise TransferError('게임 화면 갱신 정지')
+            if source_seq > last_source:
+                source_progress_at = time.monotonic()
+                break
+            if interactive and time.monotonic() - source_progress_at >= 10:
+                raise TransferError("게임 화면 10초 진행 없음")
+            if time.monotonic() >= fresh_until:
+                if interactive:break  # 로딩 유예: 이전 화면 유지용 입력, 새 게임 프레임이 아님.
+                raise TransferError('게임 화면 갱신 정지')
             time.sleep(.005)
+        repeated_source = source_seq == last_source
+        info["repeated_source"] = repeated_source
+        if repeated_source and payload != previous_payload:
+            raise TransferError("같은 원본 번호의 화면 내용 변경")
         last_source = source_seq
         if first_prefix is not None and not count:
             with Path(str(first_prefix)+'-first.ppm').open('xb') as f: f.write(raw)
             with Path(str(first_prefix)+'-first.pgm').open('xb') as f:
                 f.write(b'P5\n320 200\n255\n'+bytes(255-v*85 for v in unpack(payload)))
         scene = info.get("scene")
-        if room_refresh and (not isinstance(scene,(tuple,list)) or len(scene)!=2 or
-                any(type(v) is not int for v in scene) or not 0<=scene[0]<=15 or not 1<=scene[1]<=24):
+        scene_kind = info.get("scene_kind",0)
+        if room_refresh and (scene_kind not in (0,1) or not isinstance(scene,(tuple,list)) or len(scene)!=2 or
+                any(type(v) is not int for v in scene) or not 0<=scene[0]<=15 or not (scene[1]==0 if scene_kind else 1<=scene[1]<=24)):
             raise TransferError("방 정리에 필요한 레벨/방 메타데이터 없음 또는 오류")
-        scene = tuple(scene) if room_refresh else None
+        scene = (tuple(scene),scene_kind) if room_refresh else None
+        if repeated_source and room_refresh and scene != previous_scene:
+            raise TransferError("같은 원본 번호의 장면 변경")
         room_changed = room_refresh and count > 0 and scene != previous_scene
         info["room_refresh_requested"] = room_changed
         expected_changed = payload != previous_payload
