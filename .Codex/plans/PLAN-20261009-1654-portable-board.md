@@ -104,6 +104,7 @@ Pi의 크기와 SDLPoP의 Linux 지원은 공식 근거다. 이 조합에서의 
 | USB-A→C 데이터0.25m | [AliExpress](https://ko.aliexpress.com/item/1005009411032631.html) | 신규회원1,507원, 화면 원가5,804원, 무료배송. 기존회원 결제액 미확인 |
 | TW555075 3.7V2500mAh 보호회로 포함1셀 | [디바이스마트](https://www.devicemart.co.kr/goods/view?no=1376870) | VAT포함10,780원+배송2,700원, 평균준비3~4일, 재고수량 미표시. A1251-02 커넥터로 PiSugar PH2.0과 직접 호환 안 됨 |
 | 3.7V2500mAh P012000171 | [아이씨뱅큐](https://www.icbanq.com/P012000171) | VAT포함8,360원, 판매본문5.5×50×75mm, 배송3주 이내. 보호회로·커넥터·배송비·실재고 미확인 |
+| DFR0446 충전·승압 모듈 | [디바이스마트](https://www.devicemart.co.kr/goods/view?no=1357633) | VAT포함14,300원+배송2,700원, 평균준비1주일, 실재고 미확인. 전원관리 보완 조건은 본문 참조 |
 | MAX98357A I2S 앰프 | [Adafruit 공식](https://www.adafruit.com/product/3006) | 공식 사양 근거, 해외 배송비 별도. 저가 호환 모듈은 정확한 실장 확인 필요 |
 
 Pi용 저가 microUSB 케이블은 정격전류·AWG 미확인 상품을 최종 추천에서 제외한다. PiSugar3 Air와 DFR0446은 위의 전원 후보 검토를 따르며 범용 스위치 하나만 더하면 안전 종료가 완성된다고 간주하지 않는다.
