@@ -1,9 +1,9 @@
 [submodule "repos/LilyGo-EPD47"]
 	path = repos/LilyGo-EPD47
-	url = https://github.com/Xinyuan-LilyGO/LilyGo-EPD47.git
+	url = https://github.com/blurblah/LilyGo-EPD47.git
 [submodule "repos/SDLPoP"]
 	path = repos/SDLPoP
-	url = https://github.com/NagyD/SDLPoP.git
+	url = https://github.com/blurblah/SDLPoP.git
 [submodule "repos/EPD_Painter"]
 	path = repos/EPD_Painter
-	url = https://github.com/tonywestonuk/EPD_Painter.git
+	url = https://github.com/blurblah/EPD_Painter.git
